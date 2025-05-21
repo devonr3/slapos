@@ -2,16 +2,16 @@
 {% set part_list = [] -%}
 
 {% set sla_dict = {} -%}
-{% for sla, ref_list in slapparameter_dict.get('sla-dict', {}).iteritems() -%}
+{% for sla, ref_list in six.iteritems(slapparameter_dict.get('sla-dict', {})) -%}
 {%   do sla_dict.update(dict.fromkeys(ref_list, sla)) -%}
 {% endfor -%}
 
-{% macro sla(name, required=False) -%}
+{% macro sla(name, required=False, default_to_same_computer=True) -%}
 {% if required or name in sla_dict -%}
-{%  for k, (v,) in urlparse.parse_qs(sla_dict.pop(name), strict_parsing=1).iteritems() -%}
+{%  for k, (v,) in six.iteritems(urllib_parse.parse_qs(sla_dict.pop(name), strict_parsing=1)) -%}
 sla-{{ k }} = {{ v }}
 {%  endfor -%}
-{% else -%}
+{% elif default_to_same_computer -%}
 sla-computer_guid = ${slap-connection:computer-id}
 {% endif -%}
 {% endmacro -%}
@@ -32,6 +32,7 @@ sla-computer_guid = ${slap-connection:computer-id}
 
 {% macro common_section() -%}
 [request-common-base]
+<= monitor-parameters-propagation
 recipe = slapos.cookbook:request.serialised
 software-url = ${slap-connection:software-release-url}
 server-url = ${slap-connection:server-url}
@@ -89,7 +90,7 @@ software-type = {{ software_type }}
 config-autostart = {{ dumps(sum(storage_count)) }}
 {%- do assert(replicas < len(node_list)) %}
 {%- set monitor = set() %}
-{%- for i, node in enumerate(node_list) %}
+{%- for node in node_list %}
 {%-   set port = node.get('monitor') %}
 {%-   if port %}
 {%-     do monitor.add(node.get('admin') != 0 and port) %}
@@ -101,17 +102,17 @@ config-autostart = {{ dumps(sum(storage_count)) }}
 {%- endif %}
 {%- for i, node in enumerate(node_list) %}
 {%-   set section_id =  prefix ~ i %}
-{%-   do section_id_list.append(section_id) %}
 {%-   if node.get('master') == 0 and not node.get('monitor') %}
 {%-     do node.setdefault('admin', 0) %}
 {%-   endif %}
 {%-   if monitor or node.get('admin') == 0 %}
 {%-     do node.setdefault('monitor', 0) %}
 {%-   endif %}
+{%-   if node.get('admin', 1) or node.get('master', 1) or node.get('storage-count', 1) %}
+{%-     do section_id_list.append(section_id) %}
 
 [{{section_id}}]
 <= {{ prefix }}request-common
-name = {{ section_id }}
 return =
   master
   admin
@@ -132,10 +133,22 @@ config-monitor-port = {{ dumps(port) }}
 {%-     endif %}
 config-monitor = {{ dumps(parameter_dict.get('monitor', {})) }}
 {%-   endif %}
-{%-   for k, v in node.iteritems() %}
+{%- if 'reflink' in parameter_dict %}
+config-reflink = {{ dumps(parameter_dict.pop('reflink')) }}
+{%- endif %}
+{%-   for k, v in six.iteritems(node) %}
 config-{{ k }} = {{ dumps(v) }}
 {%-   endfor %}
 {{ sla(section_id) }}
+
+{%-   else %}
+
+[{{section(section_id)}}]
+<= request-common-base
+state = destroyed
+{%-   endif %}
+name = {{ section_id }}
+
 {%- endfor %}
 {%- do assert(len(monitor) == 1, monitor) %}
 

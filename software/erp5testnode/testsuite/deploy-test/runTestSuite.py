@@ -152,9 +152,12 @@ def main():
 
   revision = args.revision
   test_suite_title = args.test_suite_title or args.test_suite
+  # TODO: rewrite this unsing nxdtest, EggTestSuite no longer exist in erp5.util
   suite = testsuite.EggTestSuite(
       1, test_suite=args.test_suite, node_quantity=args.node_quantity,
       python_interpreter=args.python_interpreter,
+      shared_part_list=os.environ.get('SLAPOS_TEST_SHARED_PART_LIST', ''),
+      log_directory=os.environ.get('SLAPOS_TEST_LOG_DIRECTORY', ''),
       egg_test_path_dict={
           os.path.basename(os.path.normpath(path)): path
           for path in args.test_location.split(',')},
@@ -178,15 +181,15 @@ def main():
   # Create the site
   status_dict = waitForSite(args.partition_path)
 
-  status_file = tempfile.NamedTemporaryFile()
-  status_file.write(json.dumps(status_dict))
+  status_file = tempfile.NamedTemporaryFile(mode='w')
+  json.dump(status_dict, status_file)
   status_file.flush()
   os.fsync(status_file.fileno())
   os.environ['TEST_SITE_STATUS_JSON'] = status_file.name
 
   assert revision == test_result.revision, (revision, test_result.revision)
   while suite.acquire():
-    test = test_result.start(suite.running.keys())
+    test = test_result.start(list(suite.running.keys()))
     if test is not None:
       suite.start(test.name, lambda status_dict,
                   __test=test: __test.stop(**status_dict))

@@ -43,7 +43,7 @@ recipe = slapos.cookbook:request
 software-url = ${slap-connection:software-release-url}
 software-type = resilient
 name = Resilient Instance (Root Instance)
-{% for key, value in slapparameter_dict.get('cluster', {}).iteritems() -%}
+{% for key, value in slapparameter_dict.get('cluster', {}).items() -%}
 config-{{ key }} = {{ dumps(value) }}
 {% endfor -%}
 config-resiliency-backup-periodicity = */10 * * * *
@@ -56,8 +56,12 @@ config-cpu-usage-ratio = 1
 config-software-root = ${buildout:directory}/../../soft
 config-buildout-shared-folder = ${buildout:directory}/../../shared
 config-no-ipv4-frontend = true
-# XXX hardcoded
-#config-frontend-domain = google.com
+
+# Use same repository / branch for the software installed in slaprunner
+# than the tested slaprunner itself.
+config-slapos-repository = {{ slapos_repository_url }}
+config-slapos-reference = {{ slapos_repository_branch }}
+
 # XXX Hack to deploy Root Instance on the same computer as the type-test Instance
 sla-computer_guid = ${slap-connection:computer-id}
 return = backend-url

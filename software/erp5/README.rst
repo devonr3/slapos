@@ -59,7 +59,7 @@ Setting up replication
 In addition to your usual parameter set, you needs to provide the following parameters::
 
   {
-    "zope-partition-dict": {},      So no zope is instanciated
+    "zope-partition-dict": {},      So no zope is instantiated
     "zodb": [
       {
         "storage-dict": {
@@ -90,7 +90,6 @@ This software release assigns the following port ranges by default:
   balancer              2150-2199
   zope                  2200-*
   jupyter               8888
-  caucase               8890,8891
   ====================  ==========
 
 Non-zope partitions are unique in an ERP5 cluster, so you shouldn't have to

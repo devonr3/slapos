@@ -1,18 +1,19 @@
+{% set parameter_dict = dict(default_parameter_dict, **parameter_dict) -%}
 [buildout]
 parts =
   monitor-base
   promises
   publish-connection-parameter
 
-extends = ${monitor-template:rendered}
+extends = ${monitor-template:output}
 eggs-directory = ${buildout:eggs-directory}
 develop-eggs-directory = ${buildout:develop-eggs-directory}
 offline = true
 
 [fontconfig-conf]
 recipe = slapos.recipe.template:jinja2
-template = ${template-fonts-conf:output}
-rendered = $${directory:etc}/fonts.conf
+url = ${template-fonts-conf:output}
+output = $${directory:etc}/fonts.conf
 context =
     key cachedir directory:fontconfig-cache
     key fonts :fonts
@@ -25,9 +26,8 @@ fonts =
     ${liberation-fonts:location}
     ${ocrb-fonts:location}
     $${directory:fonts}
-# XXX we don't include conf.d for now, to keep compatibility with current font selection problems.
 includes =
-#    ${fontconfig:location}/etc/fonts/conf.d
+    ${fontconfig:location}/etc/fonts/conf.d
 
 [xvfb-instance]
 recipe = slapos.cookbook:wrapper
@@ -44,132 +44,156 @@ environment=
 # by placing sockets in $XORG_LOCK_DIR and using different $XORG_LOCK_DIR per partitions.
 display = :0
 
-# For selenium server options:
-# https://github.com/SeleniumHQ/selenium/wiki/Grid2#configuring-the-nodes-by-command-line
 [selenium-server-hub-instance]
 recipe = slapos.cookbook:wrapper
 wrapper-path = $${directory:services}/$${:_buildout_section_name_}
 command-line =
-  ${java-re-8:location}/bin/java
+  ${java:location}/bin/java
     -jar ${selenium-server:target}
-    -host $${:hostname}
-    -port $${:port}
-    -role hub
-    -maxSession 20
-    -newSessionWaitTimeout 600000
-    --debug
+    hub
+    --host $${:hostname}
+    --port $${:port}
 
-# newSessionWaitTimeout: let clients wait in the queue when no node are available
-# maxSession: to accept enough clients
-hostname = $${instance-parameter:ipv4-random}
+hostname = $${slap-configuration:ipv4-random}
 port = 4444
 base-url = http://$${:hostname}:$${:port}
 url = $${:base-url}/wd/hub
 register-url = $${:base-url}/grid/register/
+graphql-url = $${:base-url}/graphql
 
 
 [selenium-server-node-instance]
 # Macro for a selenium server node
-capabilities =
 port =
 java-args =
+stereotype =
 
 recipe = slapos.cookbook:wrapper
 wrapper-path = $${directory:services}/$${:_buildout_section_name_}
 command-line =
-  ${java-re-8:location}/bin/java $${:java-args}
+  ${java:location}/bin/java $${:java-args}
     -jar ${selenium-server:target}
-    -host $${:hostname}
-    -port $${:port}
-    -role node
-    -timeout 300
-    -hub $${selenium-server-hub-instance:register-url}
-    -capabilities $${:capabilities}
-    --debug
+    node
+    --host $${:hostname}
+    --port $${:port}
+    --max-sessions {{ parameter_dict['slotQuantity'] }}
+    --session-timeout 300
+    --detect-drivers false
+    --hub $${selenium-server-hub-instance:register-url}
+    --driver-configuration display-name=$${:_buildout_section_name_} max-sessions={{ parameter_dict['slotQuantity'] }} stereotype=$${:stereotype}
 
 # browsers and drivers are in buildout bin-directory, so we add that directory to to $PATH
 environment =
   PATH=${buildout:bin-directory}
   XORG_LOCK_DIR=$${directory:tmp}
   DISPLAY=$${xvfb-instance:display}
-  FONTCONFIG_FILE=$${fontconfig-conf:rendered}
-hostname = $${instance-parameter:ipv4-random}
+  LC_ALL=C.UTF8
+  FONTCONFIG_FILE=$${fontconfig-conf:output}
+hostname = $${slap-configuration:ipv4-random}
 
 
-[selenium-server-node-instance-firefox-52]
+[selenium-server-node-instance-firefox-102]
 <= selenium-server-node-instance
-capabilities = browserName=firefox,maxInstances=3,marionette=true,platform=LINUX,version=${firefox-52:version},firefox_binary=${firefox-wrapper-52:location}
-java-args = -Dwebdriver.gecko.driver=${geckodriver-0.16.1:location}
-port = 7777
-
-[selenium-server-node-instance-firefox-60]
-<= selenium-server-node-instance
-capabilities = browserName=firefox,maxInstances=3,marionette=true,platform=LINUX,version=${firefox-60:version},firefox_binary=${firefox-wrapper-60:location}
-java-args = -Dwebdriver.gecko.driver=${geckodriver-0.22.0:location}
-port = 7778
-
-[selenium-server-node-instance-firefox-68]
-<= selenium-server-node-instance
-capabilities = browserName=firefox,maxInstances=3,marionette=true,platform=LINUX,version=${firefox-68:version},firefox_binary=${firefox-wrapper-68:location}
-java-args = -Dwebdriver.gecko.driver=${geckodriver-0.24.0:location}
+stereotype = '{"browserName": "firefox", "platformName": "LINUX", "browserVersion": "${firefox-102:version}", "moz:firefoxOptions": {"binary": "${firefox-wrapper-102:location}"}}'
+java-args = -Dwebdriver.gecko.driver=${geckodriver-0.33.0:location}
 port = 7779
 
-[selenium-server-node-instance-chromium-69]
+[selenium-server-node-instance-firefox-115]
 <= selenium-server-node-instance
-capabilities = browserName=chrome,maxInstances=3,platform=LINUX,version=${chromium-69:version},chrome_binary=${chromium-wrapper-69:location}
-java-args = -Dwebdriver.chrome.driver=${chromedriver-wrapper-2.41:location}
+stereotype = '{"browserName": "firefox", "platformName": "LINUX", "browserVersion": "${firefox-115:version}", "moz:firefoxOptions": {"binary": "${firefox-wrapper-115:location}"}}'
+java-args = -Dwebdriver.gecko.driver=${geckodriver-0.33.0:location}
 port = 7780
 
+[selenium-server-node-instance-chromium-91]
+<= selenium-server-node-instance
+stereotype = '{"browserName": "chrome", "platformName": "LINUX", "browserVersion": "${chromium-91:version}", "goog:chromeOptions": {"binary": "${chromium-wrapper-91:location}"}}'
+java-args = -Dwebdriver.chrome.driver=${chromedriver-wrapper-91:location}
+port = 7781
+
+
+[selenium-server-node-instance-chromium-120]
+<= selenium-server-node-instance
+stereotype = '{"browserName": "chrome", "platformName": "LINUX", "browserVersion": "${chromium-120:version}", "goog:chromeOptions": {"binary": "${chromium-wrapper-120:location}"}}'
+java-args = -Dwebdriver.chrome.driver=${chromedriver-wrapper-120:location}
+port = 7782
 
 [selenium-server-admin-password]
 recipe = slapos.cookbook:generate.password
 username = admin
-bytes = 12
 
 [selenium-server-selenium-password]
 recipe = slapos.cookbook:generate.password
 username = selenium
-bytes = 12
 
+
+[selenium-server-frontnend-certificate]
+recipe = plone.recipe.command
+command =
+  if [ ! -e $${:cert-file} ]
+  then
+    ${openssl-output:openssl} req -x509 -nodes -days 3650 \
+      -subj "/C=AA/ST=X/L=X/O=Dis/CN=$${:common-name}" \
+      -newkey rsa -keyout $${:cert-file} \
+      -out $${:cert-file}
+  fi
+update-command = $${:command}
+cert-file = $${directory:var}/$${:_buildout_section_name_}.pem
+common-name = $${selenium-server-frontend-configuration:ip}
+location =
+  $${:cert-file}
+
+[selenium-server-frontend-configuration]
+ip = $${slap-configuration:ipv6-random}
+hostname = [$${:ip}]
+port = 9443
+path-graphql = /graphql
+path-hub = /
+pidfile = $${directory:run}/haproxy.pid
 
 [selenium-server-frontend-config]
 recipe = slapos.recipe.template:jinja2
-rendered = $${directory:etc}/$${:_buildout_section_name_}
-template = inline:
-  https://[$${:ip}]:$${:port} {
-    bind $${:ip}
-    tls self_signed # TODO
-    proxy / $${selenium-server-hub-instance:base-url} {
-      transparent
-    }
-    basicauth $${selenium-server-admin-password:username} $${selenium-server-admin-password:passwd} {
-      realm "Grid Admin"
-      $${:path-admin}
-    }
-    basicauth $${selenium-server-selenium-password:username} $${selenium-server-selenium-password:passwd} {
-      realm "Selenium Server"
-      $${:path-hub}
-    }
-  }
-ip = $${instance-parameter:ipv6-random}
-hostname = [$${:ip}]
-port = 9443
-path-admin = /grid/console
-path-hub = /wd/hub
+url = ${stack-haproxy-default-backend-config:target}
+output = $${directory:etc}/$${:_buildout_section_name_}
+context =
+  key pidfile selenium-server-frontend-configuration:pidfile
+  key content :content
 
+content =
+  frontend app
+    log global
+    bind $${selenium-server-frontend-configuration:ip}:$${selenium-server-frontend-configuration:port} ssl crt $${selenium-server-frontnend-certificate:cert-file} alpn h2,http/1.1
+    use_backend graphql if { path_beg $${selenium-server-frontend-configuration:path-graphql} }
+    use_backend hub
+
+  userlist hub
+    user $${selenium-server-selenium-password:username} password $${selenium-server-selenium-password:passwd-sha256-crypt}
+  backend hub
+    acl auth_ok http_auth(hub)
+    http-request auth realm "Selenium Server" unless auth_ok
+    server hub $${selenium-server-hub-instance:hostname}:$${selenium-server-hub-instance:port}
+
+  userlist admin
+    user $${selenium-server-admin-password:username} password $${selenium-server-admin-password:passwd-sha256-crypt}
+  backend graphql
+    acl auth_ok http_auth(admin)
+    http-request auth realm "Grid GraphQL" unless auth_ok
+    server graphql $${selenium-server-hub-instance:hostname}:$${selenium-server-hub-instance:port}
 
 [selenium-server-frontend-instance]
 recipe = slapos.cookbook:wrapper
 wrapper-path = $${directory:services}/$${:_buildout_section_name_}
 command-line =
-  ${caddy:output} -conf $${selenium-server-frontend-config:rendered}
+  ${haproxy:location}/sbin/haproxy -f $${selenium-server-frontend-config:output}
+hash-existing-files = $${buildout:directory}/software_release/buildout.cfg
+hash-files =
+  $${selenium-server-frontend-config:output}
 
-ip = $${selenium-server-frontend-config:ip}
-hostname = $${selenium-server-frontend-config:hostname}
-port = $${selenium-server-frontend-config:port}
+ip = $${selenium-server-frontend-configuration:ip}
+hostname = $${selenium-server-frontend-configuration:hostname}
+port = $${selenium-server-frontend-configuration:port}
 
-admin-url = https://$${selenium-server-admin-password:username}:$${selenium-server-admin-password:passwd}@$${:hostname}:$${:port}$${selenium-server-frontend-config:path-admin}
-url = https://$${selenium-server-selenium-password:username}:$${selenium-server-selenium-password:passwd}@$${:hostname}:$${:port}$${selenium-server-frontend-config:path-hub}
+graphql-url = https://$${selenium-server-admin-password:username}:$${selenium-server-admin-password:passwd}@$${:hostname}:$${:port}$${selenium-server-frontend-configuration:path-graphql}
+url = https://$${selenium-server-selenium-password:username}:$${selenium-server-selenium-password:passwd}@$${:hostname}:$${:port}
 
 
 [userinfo]
@@ -179,7 +203,7 @@ recipe = slapos.cookbook:userinfo
 recipe = slapos.cookbook:free_port
 minimum = 22222
 maximum = 22231
-ip = $${slap-network-information:global-ipv6}
+ip = $${slap-configuration:ipv6-random}
 hostname = $${:ip}
 
 [ssh-keygen-base]
@@ -216,15 +240,14 @@ command = echo "$${:fingerprint}" | ( grep ^Error || exit 0 && exit 1 )
 fingerprint = $${ssh-key-fingerprint-shelloutput:fingerprint}
 
 [sshd-config]
-recipe = slapos.recipe.template:jinja2
-rendered = $${directory:etc}/sshd.conf
+recipe = slapos.recipe.template
+output = $${directory:etc}/sshd.conf
 path_pid = $${directory:run}/sshd.pid
-template = inline:
+inline =
   PidFile $${:path_pid}
   Port $${sshd-address:port}
   ListenAddress $${sshd-address:ip}
   Protocol 2
-  UsePrivilegeSeparation no
   HostKey $${ssh-host-rsa-key:output}
   HostKey $${ssh-host-dsa-key:output}
   HostKey $${ssh-host-ecdsa-key:output}
@@ -238,7 +261,7 @@ template = inline:
 
 [sshd-service]
 recipe = slapos.cookbook:wrapper
-command-line = ${openssh:location}/sbin/sshd -D -e -f $${sshd-config:rendered}
+command-line = ${openssh:location}/sbin/sshd -D -e -f $${sshd-config:output}
 wrapper-path = $${directory:services}/$${:_buildout_section_name_}
 username = $${userinfo:pw-name}
 ip = $${sshd-address:ip}
@@ -251,7 +274,7 @@ recipe = plone.recipe.command
 stop-on-error = true
 location = $${buildout:directory}/.ssh
 authorized-keys-file = $${:location}/authorized_keys
-command = mkdir -p $${:location} && echo '$${instance-parameter:configuration.ssh-authorized-key}' > $${:authorized-keys-file}
+command = mkdir -p $${:location} && echo '$${slap-configuration:configuration.ssh-authorized-key}' > $${:authorized-keys-file}
 
 
 [promises]
@@ -260,58 +283,84 @@ instance-promises =
   $${sshd-listen-promise:name}
   $${selenium-server-frontend-listen-promise:name}
   $${selenium-server-hub-listen-promise:name}
-  $${selenium-server-node-firefox-52-listen-promise:name}
-  $${selenium-server-node-firefox-60-listen-promise:name}
-  $${selenium-server-node-firefox-68-listen-promise:name}
-  $${selenium-server-node-instance-chromium-69-listen-promise:name}
+  $${selenium-server-hub-nodes-registered-promise:name}
+  $${selenium-server-node-firefox-102-listen-promise:name}
+  $${selenium-server-node-firefox-115-listen-promise:name}
+  $${selenium-server-node-instance-chromium-91-listen-promise:name}
+  $${selenium-server-node-instance-chromium-120-listen-promise:name}
 
 
 [check-port-listening-promise]
 <= monitor-promise-base
-module = check_port_listening
+promise = check_socket_listening
 name = $${:_buildout_section_name_}.py
 
 [sshd-listen-promise]
 <= check-port-listening-promise
-config-hostname = $${sshd-address:hostname}
+config-host = $${sshd-address:hostname}
 config-port = $${sshd-address:port}
 
 [selenium-server-frontend-listen-promise]
 <= check-port-listening-promise
-config-hostname = $${selenium-server-frontend-instance:ip}
+config-host = $${selenium-server-frontend-instance:ip}
 config-port = $${selenium-server-frontend-instance:port}
 
 [selenium-server-hub-listen-promise]
 <= check-port-listening-promise
-config-hostname = $${selenium-server-hub-instance:hostname}
+config-host = $${selenium-server-hub-instance:hostname}
 config-port = $${selenium-server-hub-instance:port}
 
-[selenium-server-node-firefox-52-listen-promise]
-<= check-port-listening-promise
-config-hostname = $${selenium-server-node-instance-firefox-52:hostname}
-config-port = $${selenium-server-node-instance-firefox-52:port}
+# Promise waiting for all nodes to be registered
+[selenium-server-hub-nodes-registered-promise]
+<= monitor-promise-base
+promise = check_command_execute
+name = $${:_buildout_section_name_}.py
+config-command =
+  $${selenium-server-check-nodes-registered:output} $${selenium-server-hub-instance:graphql-url} $${:expected-node-count}
+# We have 4 nodes with slotQuantity slots each
+expected-node-count = {{ 4 * int(parameter_dict['slotQuantity']) }}
 
-[selenium-server-node-firefox-60-listen-promise]
-<= check-port-listening-promise
-config-hostname = $${selenium-server-node-instance-firefox-60:hostname}
-config-port = $${selenium-server-node-instance-firefox-60:port}
+[selenium-server-check-nodes-registered]
+recipe = slapos.recipe.template
+output = $${directory:bin}/$${:_buildout_section_name_}
+inline =
+  #!${buildout:executable}
+  import json, urllib.request, sys
+  api_url = sys.argv[1]
+  expected_node_count = int(sys.argv[2])
+  req = urllib.request.Request(
+    api_url,
+    data=json.dumps({"query": "{ grid { totalSlots } }"}).encode("utf-8"),
+    headers={"Content-Type": "application/json"})
+  actual_node_count = json.load(urllib.request.urlopen(req))['data']['grid']['totalSlots']
+  sys.exit(0 if expected_node_count == actual_node_count else 1)
 
-[selenium-server-node-firefox-68-listen-promise]
-<= check-port-listening-promise
-config-hostname = $${selenium-server-node-instance-firefox-68:hostname}
-config-port = $${selenium-server-node-instance-firefox-68:port}
 
-[selenium-server-node-instance-chromium-69-listen-promise]
+[selenium-server-node-firefox-102-listen-promise]
 <= check-port-listening-promise
-config-hostname = $${selenium-server-node-instance-chromium-69:hostname}
-config-port = $${selenium-server-node-instance-chromium-69:port}
+config-host = $${selenium-server-node-instance-firefox-102:hostname}
+config-port = $${selenium-server-node-instance-firefox-102:port}
 
+[selenium-server-node-firefox-115-listen-promise]
+<= check-port-listening-promise
+config-host = $${selenium-server-node-instance-firefox-115:hostname}
+config-port = $${selenium-server-node-instance-firefox-115:port}
+
+[selenium-server-node-instance-chromium-91-listen-promise]
+<= check-port-listening-promise
+config-host = $${selenium-server-node-instance-chromium-91:hostname}
+config-port = $${selenium-server-node-instance-chromium-91:port}
+
+[selenium-server-node-instance-chromium-120-listen-promise]
+<= check-port-listening-promise
+config-host = $${selenium-server-node-instance-chromium-120:hostname}
+config-port = $${selenium-server-node-instance-chromium-120:port}
 
 [publish-connection-parameter]
 recipe = slapos.cookbook:publish
 backend-url = $${selenium-server-hub-instance:url}
 url = $${selenium-server-frontend-instance:url}
-admin-url = $${selenium-server-frontend-instance:admin-url}
+graphql-url = $${selenium-server-frontend-instance:graphql-url}
 
 ssh-url = $${sshd-service:url}
 ssh-fingerprint = $${ssh-key-fingerprint:fingerprint}
@@ -319,10 +368,10 @@ ssh-fingerprint = $${ssh-key-fingerprint:fingerprint}
 # using to use unsupported browsers like safari or edge or to test
 # on mobile using appium.
 # $PORT must be free on both hosts, different clients must use different ports.
-run-node-command = PORT=7999 bash -c 'trap '"'"'kill -TERM $SSHPID; wait $SSHPID '"'"' TERM INT; ssh -L 4444:$${selenium-server-hub-instance:hostname}:$${selenium-server-hub-instance:port} -R $PORT:127.0.0.1:$PORT -p $${sshd-service:port} $${sshd-service:username}@$${sshd-service:ip} & SSHPID=$!; java -jar selenium-server-standalone-3.14.0.jar -role node -host 127.0.0.1 -port $PORT ; wait "$SSHPID"'
+run-node-command = PORT=7999 bash -c 'trap '"'"'kill -TERM $SSHPID; wait $SSHPID '"'"' TERM INT; ssh -L 4444:$${selenium-server-hub-instance:hostname}:$${selenium-server-hub-instance:port} -R $PORT:127.0.0.1:$PORT -p $${sshd-service:port} $${sshd-service:username}@$${sshd-service:ip} & SSHPID=$!; java -jar selenium-server-4.32.0.jar node --host 127.0.0.1 --port $PORT ; wait "$SSHPID"'
 
 
-[instance-parameter]
+[slap-configuration]
 recipe = slapos.cookbook:slapconfiguration
 computer = $${slap-connection:computer-id}
 partition = $${slap-connection:partition-id}

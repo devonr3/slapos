@@ -26,11 +26,12 @@
 ##############################################################################
 
 import os
+import time
 import requests
 import json
 
-from slapos.recipe.librecipe import generateHashFromFiles
 from slapos.testing.testcase import makeModuleSetUpAndTestCaseClass
+from slapos.testing.utils import CrontabMixin
 
 setUpModule, Re6stnetTestCase = makeModuleSetUpAndTestCaseClass(
     os.path.abspath(
@@ -38,9 +39,23 @@ setUpModule, Re6stnetTestCase = makeModuleSetUpAndTestCaseClass(
 
 
 class TestRe6stnetRegistry(Re6stnetTestCase):
-  def test_listen(self):
+  def test_default(self):
     connection_parameters = self.computer_partition.getConnectionParameterDict()
     registry_url = connection_parameters['re6stry-local-url']
+    promise = os.path.join(
+      self.computer_partition_root_path, 'etc', 'plugin',
+      'check-re6st-certificate.py')
+    self.assertTrue(os.path.exists(promise))
+    with open(promise) as fh:
+      promise_content = fh.read()
+    self.assertIn(
+      """extra_config_dict = { 'certificate': '%(partition_root_dir)s/etc/re6stnet/ssl/re6stnet.crt',
+  'certificate-expiration-days': '45',
+  'key': '%(partition_root_dir)s/etc/re6stnet/ssl/re6stnet.key'}""" % {
+    'partition_root_dir': self.computer_partition_root_path}, promise_content)
+    self.assertIn(
+      "from slapos.promise.plugin.check_certificate import RunPromise",
+      promise_content)
 
     _ = requests.get(registry_url)
 
@@ -59,33 +74,32 @@ class TestPortRedirection(Re6stnetTestCase):
         }, portredir_config[0])
 
 
+class TestTokens(Re6stnetTestCase, CrontabMixin):
 
-class ServicesTestCase(Re6stnetTestCase):
+  partition_reference = "SOFTINST-1"
 
   @classmethod
-  def getInstanceParameterDict(cls):
-    return {'uri-scheme': 'https'}
+  def requestDefaultInstance(cls, state='started'):
+    default_instance = super(
+      Re6stnetTestCase, cls).requestDefaultInstance(state=state)
+    cls.requestSlaveInstance()
+    return default_instance
 
-  def test_hashes(self):
-    hash_files = [
-        'software_release/buildout.cfg',
-    ]
-    expected_process_names = [
-        'httpd-{hash}-on-watch',
-    ]
+  @classmethod
+  def requestSlaveInstance(cls):
+    software_url = cls.getSoftwareURL()
+    cls.logger.debug('requesting slave "%s"', cls.partition_reference)
+    return cls.slap.request(
+      software_release=software_url,
+      partition_reference=cls.partition_reference,
+      partition_parameter_kw={},
+      shared=True,
+    )
 
-    with self.slap.instance_supervisor_rpc as supervisor:
-      process_names = [
-          process['name'] for process in supervisor.getAllProcessInfo()
-      ]
+  def test_tokens(self):
+    self._executeCrontabAtDate('re6stnet-check-token', '+10min')
+    self.slap.waitForInstance() # Wait until publish is done
 
-    hash_files = [
-        os.path.join(self.computer_partition_root_path, path)
-        for path in hash_files
-    ]
+    s = self.requestSlaveInstance()
 
-    for name in expected_process_names:
-      h = generateHashFromFiles(hash_files)
-      expected_process_name = name.format(hash=h)
-
-      self.assertIn(expected_process_name, process_names)
+    self.assertEqual("Token is ready for use", s.getConnectionParameterDict()['1_info'])

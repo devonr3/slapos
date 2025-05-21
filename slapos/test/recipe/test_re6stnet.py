@@ -38,7 +38,7 @@ class Re6stnetTest(unittest.TestCase):
                 'drop-service-wrapper': os.path.join(self.base_dir, 'drop_wrapper'),
                 'check-service-wrapper': os.path.join(self.base_dir, 'check_wrapper'),
                 'revoke-service-wrapper': os.path.join(self.base_dir, 'revoke_wrapper'),
-                'slave-instance-list': '{}'
+                'slave-instance-list': [],
                 }
     
   def tearDown(self):
@@ -52,13 +52,15 @@ class Re6stnetTest(unittest.TestCase):
       return makeRecipe(
             re6stnet.Recipe,
             options=self.options,
-            slap_connection={
+            buildout={
+              'slap-connection': {
                    'computer-id': 'comp-test',
                    'partition-id': 'slappart0',
                    'server-url': 'http://server.com',
                    'software-release-url': 'http://software.com',
                    'key-file': '/path/to/key',
                    'cert-file': '/path/to/cert'
+              }
             },
             name='re6stnet')
 
@@ -109,21 +111,25 @@ class Re6stnetTest(unittest.TestCase):
     recipe = self.new_recipe()
     serial = recipe.getSerialFromIpv6(ipv6)
 
-    self.assertEqual(serial, '0x1be280db8fe6a0d8504fe054a00ae0aea')
+    self.assertEqual(serial, '0x1be280db8fe6a0d85')
 
     ipv6 = '2001:db8:24::/48'
     serial = recipe.getSerialFromIpv6(ipv6)
 
     self.assertEqual(serial, '0x120010db80024')
 
+    ipv6 = '2001:db8:24::/47'
+    serial = recipe.getSerialFromIpv6(ipv6)
+
+    self.assertEqual(serial, '0x900086dc0012')
+
   def test_install(self):
     self.options.update({
         'ipv6-prefix': '2001:db8:24::/48',
-        'slave-instance-list': '''[
+        'slave-instance-list': [
             {"slave_reference":"SOFTINST-58770"},
             {"slave_reference":"SOFTINST-58778"}
             ]
-            '''
         })
 
     recipe = self.new_recipe()
@@ -161,7 +167,7 @@ class Re6stnetTest(unittest.TestCase):
     
     # Remove one element
     self.options.update({
-        "slave-instance-list": """[{"slave_reference":"SOFTINST-58770"}]"""
+        "slave-instance-list": [{"slave_reference":"SOFTINST-58770"}]
         })
     recipe = self.new_recipe()
     recipe.generateCertificate = self.fake_generateCertificates

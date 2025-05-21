@@ -1,0 +1,76 @@
+#############################
+#
+# Deploy beremiz' runtime  instance
+#
+#############################
+[buildout]
+parts =
+  publish-connection-parameter
+  download-plc
+  beremiz-runtime
+  http-promise
+
+eggs-directory = {{ buildout['eggs-directory'] }}
+develop-eggs-directory = {{ buildout['develop-eggs-directory'] }}
+offline = true
+
+[download-plc]
+recipe = slapos.recipe.build:download-unpacked
+offline = false
+url = ${instance-parameter:configuration.runtime_plc_url}
+md5sum = ${instance-parameter:configuration.runtime_plc_md5sum}
+
+[instance-parameter]
+recipe = slapos.cookbook:slapconfiguration
+computer = ${slap-connection:computer-id}
+partition = ${slap-connection:partition-id}
+url = ${slap-connection:server-url}
+key = ${slap-connection:key-file}
+cert = ${slap-connection:cert-file}
+configuration.runtime_plc_url =
+configuration.runtime_plc_md5sum =
+
+# Create all needed directories, depending on your needs
+[directory]
+recipe = slapos.cookbook:mkdirectory
+home = ${buildout:directory}
+etc = ${:home}/etc
+var = ${:home}/var
+script = ${:etc}/run
+service = ${:etc}/service
+promise = ${:etc}/promise
+log = ${:var}/log
+
+[beremiz-runtime]
+logfile = ${directory:log}/beremiz-runtime.log
+recipe = slapos.cookbook:wrapper
+
+# default webport in Beremiz
+webport = 8009
+
+# adding BEREMIZPYTHONPATH is needed so we can override the Beremiz'
+# internal code which tries to use sys.executable to spawn processes
+# and in the context of SlapOS it's a plain Python without needed modules
+# adding LIBRARY_PATH / COMPILER_PATH is needed so that gcc can find
+# needed libraries and tools inside SlapOS context
+# We need to add to PATH our own gcc compiler and inkscape as
+# Beremiz uses them
+environment =
+  BEREMIZPYTHONPATH = {{ buildout['bin-directory'] }}/pythonwitheggs
+  PATH={{ gcc_location }}/bin:{{ inkscape_location }}/bin
+  LIBRARY_PATH={{ openssl_location }}/lib
+  BEREMIZ_LOCAL_HOST=${instance-parameter:ipv4-random}
+
+command-line =
+ {{ buildout['bin-directory'] }}/pythonwitheggs {{ buildout['directory'] }}/parts/beremiz-source/Beremiz_cli.py -k --project-home ${directory:home}/parts/download-plc/ build transfer run
+wrapper-path = ${directory:service}/beremiz-runtime
+
+[http-promise]
+recipe = slapos.cookbook:check_port_listening
+path = ${directory:promise}/${:_buildout_section_name_}
+hostname = ${instance-parameter:ipv4-random}
+port = ${beremiz-runtime:webport}
+
+[publish-connection-parameter]
+recipe = slapos.cookbook:publish
+beremiz_runtime_url = http://${instance-parameter:ipv4-random}:${beremiz-runtime:webport}

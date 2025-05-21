@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "description": "Values returned by drone swarm (default) instantiation",
+  "additionalProperties": false,
+  "properties": {
+    "drone-id-list": {
+      "description": "List of drones IDs",
+      "type": "array"
+    },
+    "subscriber-id-list": {
+      "description": "List of subscribers IDs",
+      "type": "array"
+    }
+  },
+  "type": "object"
+}

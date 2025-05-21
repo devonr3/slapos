@@ -32,7 +32,6 @@ import os
 import sys
 import inspect
 import re
-import shutil
 import stat
 from six.moves.urllib.parse import quote
 import itertools
@@ -154,10 +153,12 @@ class GenericBaseRecipe(object):
         private_tmpfs.append(tuple(x))
     return private_tmpfs
 
-  def createWrapper(self, path, args, env=None, **kw):
+  def createWrapper(self, path, args, env=None, sig_ign=None, **kw):
     """Create a wrapper script for process replacement"""
     assert args
     if kw:
+      if sig_ign:
+        kw['sig_ign'] = sig_ign
       return self.createPythonScript(path,
         'slapos.recipe.librecipe.execute.generic_exec',
         (args, env) if env else (args,), kw)
@@ -168,8 +169,10 @@ class GenericBaseRecipe(object):
     # here (note that this can't be done correctly with a POSIX shell, because
     # the process can't be given a name).
 
-    lines = ['#!/bin/sh']
+    lines = ['#!/bin/sh -e']
 
+    if sig_ign:
+      lines.append("trap '' " + sig_ign)
     if env:
       for k, v in sorted(six.iteritems(env)):
         lines.append('export %s=%s' % (k, shlex.quote(v)))
@@ -255,31 +258,3 @@ class GenericBaseRecipe(object):
     url = urlunparse((scheme, netloc, path, params, query, fragment))
 
     return url
-
-  def setLocationOption(self):
-    if not self.options.get('location'):
-      self.options['location'] = os.path.join(
-          self.buildout['buildout']['parts-directory'], self.name)
-
-  def download(self, destination=None):
-    """ A simple wrapper around h.r.download, downloading to self.location"""
-    self.setLocationOption()
-
-    import hexagonit.recipe.download
-    if not destination:
-      destination = self.location
-    if os.path.exists(destination):
-        # leftovers from a previous failed attempt, removing it.
-        self.logger.warning('Removing already existing directory %s',
-                            destination)
-        shutil.rmtree(destination)
-    os.mkdir(destination)
-
-    try:
-      options = self.options.copy()
-      options['destination'] = destination
-      hexagonit.recipe.download.Recipe(
-          self.buildout, self.name, options).install()
-    except:
-      shutil.rmtree(destination)
-      raise

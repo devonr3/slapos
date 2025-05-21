@@ -9,6 +9,12 @@
 {% set jupyter_dict = slapparameter_dict.get('jupyter', {}) -%}
 {% set has_jupyter = jupyter_dict.get('enable', jupyter_enable_default.lower() in ('true', 'yes')) -%}
 {% set jupyter_zope_family = jupyter_dict.get('zope-family', '') -%}
+{% set wcfs_dict = slapparameter_dict.get('wcfs', {}) -%}
+{% set wcfs_enable = wcfs_dict.get('enable', wcfs_enable_default.lower() in ('true', 'yes')) -%}
+{% set with_max_rlimit_nofile_enable = slapparameter_dict.get(
+    'with-max-rlimit-nofile',
+    with_max_rlimit_nofile_enable_default.lower() in ('true', 'yes'))
+%}
 {% set test_runner_enabled = slapparameter_dict.get('test-runner', {}).get('enabled', True) -%}
 {% set test_runner_node_count = slapparameter_dict.get('test-runner', {}).get('node-count', 3) -%}
 {% set test_runner_extra_database_count = slapparameter_dict.get('test-runner', {}).get('extra-database-count', 3) -%}
@@ -19,12 +25,18 @@
 {%   set test_runner_total_database_count = mariadb_test_database_amount %}
 {%   set test_runner_enabled = mariadb_test_database_amount > 0 %}
 {% endif -%}
+{# Backward compatibility for cloudooo-url #}
+{% if slapparameter_dict.get('cloudooo-url') -%}
+{%   do slapparameter_dict.setdefault('cloudooo-url-list', slapparameter_dict['cloudooo-url'].split(',')) %}
+{% endif -%}
+{% set test_runner_random_activity_priority = slapparameter_dict.get('test-runner', {}).get('random-activity-priority') -%}
 {% set monitor_base_url_dict = {} -%}
 {% set monitor_dict = slapparameter_dict.get('monitor', {}) %}
 {% set use_ipv6 = slapparameter_dict.get('use-ipv6', False) -%}
 {% set partition_thread_count_list = [] -%}
 {% set zope_partition_dict = slapparameter_dict.get('zope-partition-dict', {'1': {}}) -%}
-{% for zope_parameter_dict in zope_partition_dict.values() -%}
+{% set zope_family_override_dict = slapparameter_dict.get('family-override', {}) -%}
+{% for zope_parameter_dict in six.itervalues(zope_partition_dict) -%}
 {#   Apply some zope_parameter_dict default values, to avoid duplication. -#}
 {%   do zope_parameter_dict.setdefault('thread-amount', 4) -%}
 {%   do zope_parameter_dict.setdefault('instance-count', 1) -%}
@@ -34,7 +46,8 @@
 <= request-common-base
 config-use-ipv6 = {{ dumps(slapparameter_dict.get('use-ipv6', False)) }}
 config-computer-memory-percent-threshold = {{ dumps(monitor_dict.get('computer-memory-percent-threshold', 80)) }}
-{% set caucase_url = slapparameter_dict.get('caucase', {}).pop('url', '') -%}
+{% set caucase_dict = slapparameter_dict.get('caucase', {}) -%}
+{% set caucase_url = caucase_dict.get('url', '') -%}
 
 {% macro request(name, software_type, config_key, config, ret={'url': True}, key_config={}) -%}
 {% do config.update(slapparameter_dict.get(config_key, {})) -%}
@@ -44,7 +57,7 @@ config-computer-memory-percent-threshold = {{ dumps(monitor_dict.get('computer-m
 name = {{ name }}
 software-type = {{ software_type }}
 return = {{ ' '.join(ret) }}
-{% for ret, publish in ret.iteritems() -%}
+{% for ret, publish in six.iteritems(ret) -%}
 {%   if publish -%}
 {%     do publish_dict.__setitem__(name ~ '-' ~ ret, '${' ~ section ~ ':connection-' ~ ret ~ '}') %}
 {%   endif -%}
@@ -53,10 +66,10 @@ return = {{ ' '.join(ret) }}
 {%   endif -%}
 {% endfor -%}
 {{ root_common.sla(name) }}
-{% for k, v in config.iteritems() -%}
+{% for k, v in six.iteritems(config) -%}
 config-{{ k }} = {{ dumps(v) }}
 {% endfor -%}
-{% for k, v in key_config.iteritems() -%}
+{% for k, v in six.iteritems(key_config) -%}
 config-{{ k }} = {{ '${' ~ v ~ '}' }}
 {% endfor -%}
 config-name = {{ name }}
@@ -64,13 +77,12 @@ config-name = {{ name }}
 
 [directory]
 recipe = slapos.cookbook:mkdirectory
-etc = ${buildout:directory}/etc
-service-on-watch = ${:etc}/service
+bin = ${buildout:directory}/bin
+service-on-watch = ${buildout:directory}/etc/service
 srv = ${buildout:directory}/srv
+tmp = ${buildout:directory}/tmp
 backup-caucased = ${:srv}/backup/caucased
 
-{% set caucase_dict = slapparameter_dict.get('caucase', {}) -%}
-{% set caucase_url = caucase_dict.get('url') -%}
 {% if not caucase_url -%}
 {%   if use_ipv6 -%}
 {%     set caucase_host = '[' ~ (ipv6_set | list)[0] ~ ']' %}
@@ -87,6 +99,7 @@ backup-caucased = ${:srv}/backup/caucased
        backup_dir='${directory:backup-caucased}',
        data_dir='${directory:srv}/caucased',
        netloc=caucase_netloc,
+       tmp='${directory:tmp}',
        service_auto_approve_count=caucase_dict.get('service-auto-approve-amount', 1),
        user_auto_approve_count=caucase_dict.get('user-auto-approve-amount', 0),
        key_len=caucase_dict.get('key-length', 2048),
@@ -95,8 +108,35 @@ backup-caucased = ${:srv}/backup/caucased
 {% do root_common.section('caucased-promise') -%}
 {% endif -%}
 {% do publish_dict.__setitem__('caucase-http-url', caucase_url) -%}
-{% set balancer_dict = slapparameter_dict.get('balancer', {}) -%}
+{% set balancer_dict = slapparameter_dict.setdefault('balancer', {}) -%}
 {% do balancer_dict.setdefault('ssl', {}).setdefault('caucase-url', caucase_url) -%}
+{% do balancer_dict.setdefault('tcpv4-port', 2150) -%}
+{% do balancer_dict.__setitem__('haproxy-server-check-path', balancer_dict.get('haproxy-server-check-path', '/') % {'site-id': site_id}) -%}
+{% set routing_path_template_field_dict = {"site-id": site_id} -%}
+{% macro expandRoutingPath(output, input) -%}
+{%   for outer_prefix, inner_prefix in input -%}
+{%     do output.append((outer_prefix, inner_prefix % routing_path_template_field_dict)) -%}
+{%   endfor -%}
+{% endmacro -%}
+{% set path_routing_list = [] -%}
+{% do expandRoutingPath(
+  path_routing_list,
+  balancer_dict.get(
+    'path-routing-list',
+    (('/', '/'), ),
+  ),
+) -%}
+{% do balancer_dict.__setitem__('path-routing-list', path_routing_list) -%}
+{% set family_path_routing_dict = {} -%}
+{% for name, family_path_routing_list in balancer_dict.get(
+  'family-path-routing-dict',
+  {},
+).items() -%}
+{%    set path_routing_list = [] -%}
+{%    do expandRoutingPath(path_routing_list, family_path_routing_list) -%}
+{%    do family_path_routing_dict.__setitem__(name, path_routing_list) -%}
+{% endfor -%}
+{% do balancer_dict.__setitem__('family-path-routing-dict', family_path_routing_dict) -%}
 
 {{ request('memcached-persistent', 'kumofs', 'kumofs', {'tcpv4-port': 2000}, {'url': True, 'monitor-base-url': False}, key_config={'monitor-passwd': 'monitor-htpasswd:passwd'}) }}
 {{ request('memcached-volatile', 'kumofs', 'memcached', {'tcpv4-port': 2010, 'ram-storage-size': 64}, {'url': True, 'monitor-base-url': False}, key_config={'monitor-passwd': 'monitor-htpasswd:passwd'}) }}
@@ -145,7 +185,7 @@ connection-url = smtp://127.0.0.2:0/
 {% endfor -%}
 {% do assert(len(mountpoints) == len(zodb_dict)) -%}
 {% set neo = [] -%}
-{% for server_type, server_dict in storage_dict.iteritems() -%}
+{% for server_type, server_dict in six.iteritems(storage_dict) -%}
 {%   if server_type == 'neo' -%}
 {%     set ((name, server_dict),) = server_dict.items() -%}
 {%     do neo.append(server_dict.get('cluster')) -%}
@@ -162,55 +202,12 @@ connection-url = smtp://127.0.0.2:0/
 {%   endif -%}
 {% endfor -%}
 
-
-{% set zope_address_list_id_dict = {} -%}
-{% if zope_partition_dict -%}
-
-[request-zope-base]
-<= request-common
-return =
-  zope-address-list
-  hosts-dict
-  monitor-base-url
-{%- if test_runner_enabled %}
-  test-runner-address-list
-{% endif %}
-{% set bt5_default_list = 'erp5_full_text_mroonga_catalog slapos_configurator' -%}
-{% if has_jupyter -%}
-{%   set bt5_default_list = bt5_default_list + ' erp5_data_notebook' -%}
-{% endif -%}
-config-bt5 = {{ dumps(slapparameter_dict.get('bt5', bt5_default_list)) }}
-config-bt5-repository-url = {{ dumps(slapparameter_dict.get('bt5-repository-url', local_bt5_repository)) }}
-config-cloudooo-url = {{ dumps(slapparameter_dict.get('cloudooo-url', default_cloudooo_url)) }}
-config-caucase-url = {{ dumps(caucase_url) }}
-config-deadlock-debugger-password = ${publish-early:deadlock-debugger-password}
-config-developer-list = {{ dumps(slapparameter_dict.get('developer-list', [inituser_login])) }}
-config-saucelabs-dict = {{ dumps(slapparameter_dict.get('saucelabs-dict', {})) }}
-config-hosts-dict = {{ dumps(slapparameter_dict.get('hosts-dict', {})) }}
-config-hostalias-dict = {{ dumps(slapparameter_dict.get('hostalias-dict', {})) }}
-config-id-store-interval = {{ dumps(slapparameter_dict.get('id-store-interval')) }}
-config-zope-longrequest-logger-error-threshold = {{ dumps(monitor_dict.get('zope-longrequest-logger-error-threshold', 20)) }}
-config-zope-longrequest-logger-maximum-delay = {{ dumps(monitor_dict.get('zope-longrequest-logger-maximum-delay', 0)) }}
-config-inituser-login = {{ dumps(inituser_login) }}
-config-inituser-password = ${publish-early:inituser-password}
-config-kumofs-url = ${request-memcached-persistent:connection-url}
-config-memcached-url = ${request-memcached-volatile:connection-url}
-config-monitor-passwd = ${monitor-htpasswd:passwd}
-config-mysql-test-url-list = ${request-mariadb:connection-test-database-list}
-config-mysql-url-list = ${request-mariadb:connection-database-list}
-config-site-id = {{ dumps(site_id) }}
-config-smtp-url = ${request-smtp:connection-url}
-config-timezone = {{ dumps(slapparameter_dict.get('timezone', 'UTC')) }}
-config-cloudooo-retry-count = {{ slapparameter_dict.get('cloudooo-retry-count', 2) }}
-config-wendelin-core-zblk-fmt = {{ dumps(slapparameter_dict.get('wendelin-core-zblk-fmt', '')) }}
-config-ca-path = ${directory:ca-dir}
+[request-zodb-base]
 config-zodb-dict = {{ dumps(zodb_dict) }}
-config-test-runner-enabled = {{ dumps(test_runner_enabled) }}
-config-test-runner-node-count = {{ dumps(test_runner_node_count) }}
-{% for server_type, server_dict in storage_dict.iteritems() -%}
+{% for server_type, server_dict in six.iteritems(storage_dict) -%}
 {%   if server_type == 'neo' -%}
 config-neo-cluster = ${publish-early:neo-cluster}
-config-neo-name = {{ server_dict.keys()[0] }}
+config-neo-name = {{ list(server_dict.keys())[0] }}
 config-neo-masters = ${publish-early:neo-masters}
 {%   else -%}
 config-zodb-zeo = ${request-zodb:connection-storage-dict}
@@ -218,16 +215,73 @@ config-tidstorage-ip = ${request-zodb:connection-tidstorage-ip}
 config-tidstorage-port = ${request-zodb:connection-tidstorage-port}
 {%   endif -%}
 {% endfor -%}
+
+
+{% set zope_address_list_id_dict = {} -%}
+{% if zope_partition_dict -%}
+
+[request-zope-base]
+<= request-common
+   request-zodb-base
+return =
+  zope-address-list
+  hosts-dict
+  monitor-base-url
+  software-release-url
+{%- if test_runner_enabled %}
+  test-runner-address-list
+{% endif %}
+{% set bt5_default_list = [
+  'erp5_full_text_mroonga_catalog',
+  'slapos_configurator',
+] -%}
+{% if has_jupyter -%}
+{%   do bt5_default_list.append('erp5_data_notebook') -%}
+{% endif -%}
+config-bt5 = {{ dumps(slapparameter_dict.get('bt5', ' '.join(bt5_default_list))) }}
+config-bt5-repository-url = {{ dumps(slapparameter_dict.get('bt5-repository-url', local_bt5_repository)) }}
+config-cloudooo-url-list = {{ dumps(slapparameter_dict.get('cloudooo-url-list', default_cloudooo_url_list)) }}
+config-caucase-url = {{ dumps(caucase_url) }}
+config-deadlock-debugger-password = ${publish-early:deadlock-debugger-password}
+config-developer-list = {{ dumps(slapparameter_dict.get('developer-list', [inituser_login])) }}
+config-selenium-server-configuration-dict = {{ dumps(slapparameter_dict.get('selenium-server-configuration-dict', {})) }}
+config-hosts-dict = {{ dumps(slapparameter_dict.get('hosts-dict', {})) }}
+config-computer-hosts-dict = {{ dumps(slapparameter_dict.get('computer-hosts-dict', {})) }}
+config-hostalias-dict = {{ dumps(slapparameter_dict.get('hostalias-dict', {})) }}
+config-id-store-interval = {{ dumps(slapparameter_dict.get('id-store-interval')) }}
+config-zope-longrequest-logger-error-threshold = {{ dumps(monitor_dict.get('zope-longrequest-logger-error-threshold', 20)) }}
+config-zope-longrequest-logger-maximum-delay = {{ dumps(monitor_dict.get('zope-longrequest-logger-maximum-delay', 0)) }}
+config-inituser-login = {{ dumps(inituser_login) }}
+config-inituser-password-hashed = ${publish-early:inituser-password-hashed}
+config-kumofs-url = ${request-memcached-persistent:connection-url}
+config-memcached-url = ${request-memcached-volatile:connection-url}
+config-monitor-passwd = ${monitor-htpasswd:passwd}
+config-mysql-test-url-list = ${request-mariadb:connection-test-database-list}
+config-mysql-url-list = ${request-mariadb:connection-database-list}
+config-python-hash-seed = {{ dumps(slapparameter_dict.get('python-hash-seed', '')) }}
+config-site-id = {{ dumps(site_id) }}
+config-smtp-url = ${request-smtp:connection-url}
+config-timezone = {{ dumps(slapparameter_dict.get('timezone', 'UTC')) }}
+config-cloudooo-retry-count = {{ slapparameter_dict.get('cloudooo-retry-count', 2) }}
+config-wendelin-core-zblk-fmt = {{ dumps(slapparameter_dict.get('wendelin-core-zblk-fmt', '')) }}
+config-test-runner-enabled = {{ dumps(test_runner_enabled) }}
+config-test-runner-node-count = {{ dumps(test_runner_node_count) }}
+config-test-runner-random-activity-priority = {{ dumps(test_runner_random_activity_priority) }}
+config-wcfs_enable = {{ dumps(wcfs_enable) }}
+config-test-runner-configuration = {{ dumps(slapparameter_dict.get('test-runner', {})) }}
 software-type = zope
 
+{% set global_publisher_timeout = slapparameter_dict.get('publisher-timeout', 300) -%}
+{% set global_activity_timeout = slapparameter_dict.get('activity-timeout') -%}
 {% set zope_family_dict = {} -%}
 {% set zope_family_name_list = [] -%}
 {% set zope_backend_path_dict = {} -%}
 {% set ssl_authentication_dict = {} -%}
 {% set jupyter_zope_family_default = [] -%}
-{% for custom_name, zope_parameter_dict in zope_partition_dict.items() -%}
+{% for custom_name, zope_parameter_dict in six.iteritems(zope_partition_dict) -%}
 {%   set partition_name = 'zope-' ~ custom_name -%}
 {%   set section_name = 'request-' ~ partition_name -%}
+{%   set promise_software_url_section_name = 'promise-software-url' ~ partition_name -%}
 {%   set zope_family = zope_parameter_dict.get('family', 'default') -%}
 {%   do zope_family_name_list.append(zope_family) %}
 {%   set backend_path = zope_parameter_dict.get('backend-path', '') % {'site-id': site_id} %}
@@ -239,6 +293,7 @@ software-type = zope
 {%   do zope_family_dict.setdefault(zope_family, []).append(section_name) -%}
 {%   do zope_backend_path_dict.__setitem__(zope_family, backend_path) -%}
 {%   do ssl_authentication_dict.__setitem__(zope_family, zope_parameter_dict.get('ssl-authentication', False)) -%}
+{%   set current_zope_family_override_dict = zope_family_override_dict.get(zope_family, {}) -%}
 [{{ section_name }}]
 <= request-zope-base
 name = {{ partition_name }}
@@ -248,15 +303,31 @@ config-name = {{ dumps(custom_name) }}
 config-instance-count = {{ dumps(zope_parameter_dict['instance-count']) }}
 config-private-dev-shm = {{ zope_parameter_dict.get('private-dev-shm', '') }}
 config-thread-amount = {{ dumps(zope_parameter_dict['thread-amount']) }}
-config-timerserver-interval = {{ dumps(zope_parameter_dict.get('timerserver-interval', 5)) }}
+config-timerserver-interval = {{ dumps(zope_parameter_dict.get('timerserver-interval', 1)) }}
 config-longrequest-logger-interval = {{ dumps(zope_parameter_dict.get('longrequest-logger-interval', -1)) }}
 config-longrequest-logger-timeout = {{ dumps(zope_parameter_dict.get('longrequest-logger-timeout', 1)) }}
 config-large-file-threshold = {{ dumps(zope_parameter_dict.get('large-file-threshold', "10MB")) }}
 config-port-base = {{ dumps(zope_parameter_dict.get('port-base', 2200)) }}
-config-webdav = {{ dumps(zope_parameter_dict.get('webdav', False)) }}
-config-wsgi = {{ dumps(slapparameter_dict.get('wsgi', True)) }}
+config-with-max-rlimit-nofile = {{ dumps(with_max_rlimit_nofile_enable) }}
+{# BBB: zope_parameter_dict used to contain 'webdav', so fallback to it -#}
+config-webdav = {{ dumps(current_zope_family_override_dict.get('webdav', zope_parameter_dict.get('webdav', False))) }}
+config-xml-rpc = {{ dumps(current_zope_family_override_dict.get('xml-rpc', False)) }}
+config-publisher-timeout = {{ dumps(current_zope_family_override_dict.get('publisher-timeout', global_publisher_timeout)) }}
+config-activity-timeout = {{ dumps(current_zope_family_override_dict.get('activity-timeout', global_activity_timeout)) }}
 {%   if test_runner_enabled -%}
-config-test-runner-apache-url-list = ${publish-early:{{ zope_family }}-test-runner-url-list}
+config-test-runner-balancer-url-list = ${publish-early:{{ zope_family }}-test-runner-url-list}
+
+[{{ promise_software_url_section_name }}]
+# Promise to wait for zope partition to use the expected software URL,
+# used on upgrades.
+recipe = slapos.cookbook:check_parameter
+value = {{ '${' ~ section_name ~ ':connection-software-release-url}' }}
+expected-not-value =
+expected-value = ${slap-connection:software-release-url}
+path = ${directory:bin}/${:_buildout_section_name_}
+
+{% do root_common.section(promise_software_url_section_name) -%}
+
 {%   endif -%}
 {% endfor -%}
 
@@ -301,6 +372,17 @@ config-url = ${request-jupyter:connection-url}
 {%   endif -%}
 {%- endif %}
 
+{% if wcfs_enable -%}
+{# request WCFS connected to ZODB -#}
+{%   do root_common.section('request-wcfs') -%}
+{{   request('wcfs', 'wcfs', 'wcfs', {}, {}) }}
+
+[request-wcfs]
+<= request-common
+   request-zodb-base
+
+{%- endif %}
+
 [directory]
 recipe = slapos.cookbook:mkdirectory
 {% if slapparameter_dict.get('shared-certificate-authority-path', '') -%}
@@ -310,6 +392,7 @@ ca-dir = ${buildout:directory}/srv/ssl
 {% endif -%}
 bin = ${buildout:directory}/bin
 etc = ${buildout:directory}/etc
+tmp = ${buildout:directory}/tmp
 services = ${:etc}/run
 requests = ${:ca-dir}/requests
 private = ${:ca-dir}/private
@@ -358,6 +441,7 @@ return =
 {% endfor -%}
 {% do monitor_base_url_dict.__setitem__('request-balancer', '${' ~ 'request-balancer' ~ ':connection-monitor-base-url}') -%}
 config-zope-family-dict = {{ dumps(zope_family_parameter_dict) }}
+config-frontend-parameter-dict = {{ dumps({}) }}
 config-tcpv4-port = {{ dumps(balancer_dict.get('tcpv4-port', 2150)) }}
 {% for zope_section_id, name in zope_address_list_id_dict.items() -%}
 config-{{ name }} = {{ ' ${' ~ zope_section_id ~ ':connection-zope-address-list}' }}
@@ -370,21 +454,31 @@ config-haproxy-server-check-path = {{ dumps(balancer_dict.get('haproxy-server-ch
 config-monitor-passwd = ${monitor-htpasswd:passwd}
 config-ssl = {{ dumps(balancer_dict['ssl']) }}
 config-name = ${:name}
-config-shared-certificate-authority-path = ${directory:ca-dir} 
+config-shared-certificate-authority-path = ${directory:ca-dir}
+config-check-crl = {{ dumps(slapparameter_dict.get('check-crl', True)) }}
 config-backend-path-dict = {{ dumps(zope_backend_path_dict) }}
 config-ssl-authentication-dict = {{ dumps(ssl_authentication_dict) }}
 config-apachedex-promise-threshold = {{ dumps(monitor_dict.get('apachedex-promise-threshold', 70)) }}
-config-apachedex-configuration = {{ dumps(monitor_dict.get('apachedex-configuration',
-'--erp5-base +erp5 .*/VirtualHostRoot/erp5(/|\\?|$) --base +other / --skip-user-agent Zabbix --error-detail --js-embed --quiet')) }}
+config-apachedex-configuration = {{
+  dumps(
+    monitor_dict.get(
+      'apachedex-configuration',
+      [
+        '--erp5-base', '+erp5', '.*/VirtualHostRoot/erp5(/|\\?|$)',
+        '--base', '+other', '/',
+        '--skip-user-agent', 'Zabbix',
+        '--error-detail',
+        '--js-embed',
+        '--quiet'])) }}
 
 [request-frontend-base]
 {% if has_frontend -%}
 <= request-common
 recipe = slapos.cookbook:request
 software-url = {{ dumps(frontend_dict['software-url']) }}
-software-type = {{ dumps(frontend_dict.get('software-type', 'RootSoftwareInstance')) }}
+software-type = {{ dumps(frontend_dict.get('software-type', 'default')) }}
 {{ root_common.sla('frontend', True) }}
-slave = true
+shared = true
 {% set config_dict = {
   'type': 'zope',
 } -%}
@@ -414,14 +508,14 @@ recipe = slapos.cookbook:publish.serialised
 Pick any published hosts-dict, they are expected to be identical - and there is
 no way to check here.
 -#}
-hosts-dict = {{ '${' ~ zope_address_list_id_dict.keys()[0] ~ ':connection-hosts-dict}' }}
+hosts-dict = {{ '${' ~ next(iter(zope_address_list_id_dict)) ~ ':connection-hosts-dict}' }}
 {% endif -%}
 {% for name, value in publish_dict.items() -%}
 {{   name }} = {{ value }}
 {% endfor -%}
 {% if test_runner_enabled -%}
 {%   for zope_family_name in zope_family_name_list -%}
-{{ zope_family_name }}-test-runner-url-list = ${request-balancer:connection-{{ zope_family_name }}-test-runner-url-list}
+{{     zope_family_name }}-test-runner-url-list = ${request-balancer:connection-{{ zope_family_name }}-test-runner-url-list}
 {%   endfor -%}
 {% endif -%}
 
@@ -429,6 +523,7 @@ hosts-dict = {{ '${' ~ zope_address_list_id_dict.keys()[0] ~ ':connection-hosts-
 recipe = slapos.cookbook:publish-early
 -init =
   inituser-password gen-password:passwd
+  inituser-password-hashed gen-password:passwd-ldap-salted-sha1
   deadlock-debugger-password gen-deadlock-debugger-password:passwd
 {%- if has_posftix %}
   smtpd-sasl-password gen-smtpd-sasl-password:passwd
@@ -446,10 +541,6 @@ recipe = slapos.cookbook:publish-early
 neo-cluster = {{ dumps(neo[0]) }}
 {%-  endif %}
 {%- endif %}
-{%- set inituser_password = slapparameter_dict.get('inituser-password') %}
-{%- if inituser_password %}
-inituser-password = {{ dumps(inituser_password) }}
-{%- endif %}
 {%- set deadlock_debugger_password = slapparameter_dict.get('deadlock-debugger-password') -%}
 {%- if deadlock_debugger_password %}
 deadlock-debugger-password = {{ dumps(deadlock_debugger_password) }}
@@ -466,6 +557,10 @@ recipe =
 [gen-password]
 recipe = slapos.cookbook:generate.password
 storage-path =
+{%- set inituser_password = slapparameter_dict.get('inituser-password') %}
+{%- if inituser_password %}
+passwd = {{ dumps(inituser_password) }}
+{%- endif %}
 
 [gen-deadlock-debugger-password]
 <= gen-password

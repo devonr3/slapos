@@ -104,6 +104,7 @@ class Recipe(GenericBaseRecipe):
         else:
             paths.extend(self.createConfig())
             paths.extend(self.createRunScript())
+            self.updateSuperuser()
 
         return paths
 
@@ -146,21 +147,23 @@ class Recipe(GenericBaseRecipe):
         with open(postgres_conf, 'w') as cfg:
             cfg.write(textwrap.dedent("""\
                     listen_addresses = '%s'
+                    %s
                     logging_collector = on
                     log_rotation_size = 50MB
                     max_connections = 100
                     datestyle = 'iso, mdy'
 
-                    lc_messages = 'en_US.UTF-8'
-                    lc_monetary = 'en_US.UTF-8'
-                    lc_numeric = 'en_US.UTF-8'
-                    lc_time = 'en_US.UTF-8'
+                    lc_messages = 'C.UTF-8'
+                    lc_monetary = 'C.UTF-8'
+                    lc_numeric = 'C.UTF-8'
+                    lc_time = 'C.UTF-8'
                     default_text_search_config = 'pg_catalog.english'
 
                     unix_socket_directories = '%s'
                     unix_socket_permissions = 0700
                     """ % (
                         ','.join(set(ipv4).union(ipv6)),
+                        'port = %s' % self.options['port'] if self.options['port'] else '',
                         pgdata,
                         )))
 
@@ -191,6 +194,28 @@ class Recipe(GenericBaseRecipe):
     def createDatabase(self):
         self.runPostgresCommand(cmd='CREATE DATABASE "%s"' % self.options['dbname'])
 
+    def isPosgresServerRunning(self):
+        pgdata = self.options['pgdata-directory']
+        postmaster_pid_file = os.path.join(pgdata, 'postmaster.pid')
+        if os.path.exists(postmaster_pid_file):
+            pg_ctl_binary = os.path.join(self.options['bin'], 'pg_ctl')
+            self.check_exists(pg_ctl_binary)
+
+            # Check the postgres is running or not
+            # if not, delete the ppostmaster.pid and run it again
+            try:
+              output1 = subprocess.check_output([pg_ctl_binary, 'status', '-D', pgdata], stderr=subprocess.STDOUT)
+            except subprocess.CalledProcessError as e:
+              if e.returncode == 3:
+                # If the server is not running, pg_ctl returns an exit status of 3
+                # see https://www.postgresql.org/docs/current/app-pg-ctl.html
+                os.remove(postmaster_pid_file)
+                return False
+              else:
+                raise
+            return True
+        else:
+          return False
 
     def updateSuperuser(self):
         """\
@@ -205,9 +230,25 @@ class Recipe(GenericBaseRecipe):
 
         # encrypt the password to avoid storing in the logs
         enc_password = 'md5' + hashlib.md5((password + user).encode()).hexdigest()
+        change_password_query = """ALTER USER "%s" ENCRYPTED PASSWORD '%s'""" % (user, enc_password)
 
-        self.runPostgresCommand(cmd="""ALTER USER "%s" ENCRYPTED PASSWORD '%s'""" % (user, enc_password))
-
+        pgdata = self.options['pgdata-directory']
+        if self.isPosgresServerRunning():
+            psql_binary = os.path.join(self.options['bin'], 'psql')
+            # connect to a running postgres deamon
+            p = subprocess.Popen([
+                    psql_binary,
+                    '-h', pgdata,
+                    '-p', self.options['port'],
+                    '-U', user,
+                    '-d', self.options['dbname'],
+                ],
+                stdin=subprocess.PIPE)
+            p.communicate((change_password_query + '\n').encode())
+            if p.returncode:
+                raise UserError("Error updating password")
+        else:
+            self.runPostgresCommand(cmd=change_password_query)
 
     def runPostgresCommand(self, cmd):
         """\

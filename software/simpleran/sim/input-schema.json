@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Parameter Form",
+  "type": "object",
+  "oneOf": [
+    {
+      "$ref": "input-schema-milenage.json"
+    },
+    {
+      "$ref": "input-schema-xor.json"
+    }
+  ]
+}

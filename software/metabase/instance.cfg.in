@@ -1,0 +1,255 @@
+[buildout]
+parts =
+  publish-connection-parameter
+
+extends = ${monitor2-template:output}
+eggs-directory = ${buildout:eggs-directory}
+develop-eggs-directory = ${buildout:develop-eggs-directory}
+offline = true
+
+[fontconfig-conf]
+recipe = slapos.recipe.template:jinja2
+url = ${template-fonts-conf:output}
+output = $${directory:etc}/fonts.conf
+context =
+    key cachedir directory:fontconfig-cache
+    key fonts :fonts
+    key includes :includes
+fonts =
+    ${android-fonts:location}
+    ${dejavu-fonts:location}
+    ${ipa-fonts:location}
+    ${ipaex-fonts:location}
+    ${liberation-fonts:location}
+    ${ocrb-fonts:location}
+includes =
+    ${fontconfig:location}/etc/fonts/conf.d
+
+[slap-parameter]
+recipe = slapos.recipe.build
+slapparameter-dict = $${slap-configuration:configuration}
+home = $${buildout:directory}
+init =
+  default_parameters = options.get('slapparameter-dict')
+  options['mb-password-complexity'] = default_parameters.get(
+    'mb-password-complexity',
+      default_parameters.get('mb_password_complexity', 'normal'))
+  options['mb-password-length'] = default_parameters.get(
+    'mb-password-length',
+      default_parameters.get('mb_password_length', '6'))
+  options['mb-aggregated-query-row-limit'] = default_parameters.get(
+    'mb-aggregated-query-row-limit', '10000')
+  options['mb-unaggregated-query-row-limit'] = default_parameters.get(
+    'mb-unaggregated-query-row-limit', '2000')
+
+[metabase-instance]
+recipe = slapos.cookbook:wrapper
+wrapper-path = $${directory:service}/$${:_buildout_section_name_}
+command-line = sh -c "cd $${directory:srv-metabase}; ${java:location}/bin/java $JAVA_ARGS -jar ${metabase.jar:location}/metabase.jar"
+# https://www.metabase.com/docs/latest/operations-guide/customizing-jetty-webserver.html
+# note that we set org.quartz.scheduler.instanceId through $JAVA_ARGS as a workaround for machines
+# which cannot resolve their hostnames. See also https://github.com/metabase/metabase/issues/8373
+environment =
+  MB_EMOJI_IN_LOGS=false
+  MB_JETTY_HOST=$${:ip}
+  MB_JETTY_PORT=$${:port}
+  MB_DB_TYPE=postgres
+  MB_DB_DBNAME=$${postgresql:dbname}
+  MB_DB_PORT=$${postgresql:port}
+  MB_DB_USER=$${postgresql:superuser}
+  MB_DB_PASS=$${postgresql:password}
+  MB_DB_HOST=$${postgresql:ipv4}
+  MB_PASSWORD_COMPLEXITY=$${slap-parameter:mb-password-complexity}
+  MB_PASSWORD_LENGTH=$${slap-parameter:mb-password-length}
+  MB_AGGREGATED_QUERY_ROW_LIMIT=$${slap-parameter:mb-aggregated-query-row-limit}
+  MB_UNAGGREGATED_QUERY_ROW_LIMIT=$${slap-parameter:mb-unaggregated-query-row-limit}
+  FONTCONFIG_FILE=$${fontconfig-conf:output}
+  JAVA_ARGS=-Dorg.quartz.scheduler.instanceId=$${slap-connection:computer-id}.$${slap-connection:partition-id} -Djava.io.tmpdir="$${directory:tmp}"
+hash-existing-files =
+  $${buildout:directory}/software_release/buildout.cfg
+
+ip = $${slap-configuration:ipv4-random}
+port = 18080
+promises =
+  $${metabase-promise:name}
+
+[metabase-frontend-certificate]
+recipe = plone.recipe.command
+command =
+  if [ ! -e $${:cert-file} ]
+  then
+    ${openssl-output:openssl} req -x509 -nodes -sha256 -days 3650 \
+      -subj "/C=AA/ST=X/L=X/O=Dis/CN=$${:common-name}" \
+      -newkey rsa -keyout $${:cert-file} \
+      -out $${:cert-file}
+  fi
+update-command = $${:command}
+cert-file = $${directory:var}/$${:_buildout_section_name_}.pem
+common-name = $${metabase-frontend-config:ip}
+location =
+  $${:cert-file}
+
+[metabase-frontend-config]
+recipe = slapos.recipe.template:jinja2
+url = ${stack-haproxy-default-backend-config:target}
+output = $${directory:etc}/$${:_buildout_section_name_}
+context =
+  key pidfile :pidfile
+  key content :content
+content =
+  listen app
+  log global
+  bind $${:ip}:$${:port} ssl crt $${metabase-frontend-certificate:cert-file} alpn h2,http/1.1
+  server app $${metabase-instance:ip}:$${metabase-instance:port}
+
+pidfile = $${directory:run}/$${:_buildout_section_name_}.pid
+ip = $${slap-configuration:ipv6-random}
+port = 8443
+
+[metabase-frontend]
+recipe = slapos.cookbook:wrapper
+wrapper-path = $${directory:services}/$${:_buildout_section_name_}
+command-line =
+  ${haproxy:location}/sbin/haproxy -f $${metabase-frontend-config:output}
+
+url = https://[$${metabase-frontend-config:ip}]:$${metabase-frontend-config:port}
+
+[metabase-promise]
+<= monitor-promise-base
+promise = check_url_available
+name = $${:_buildout_section_name_}.py
+config-url= $${metabase-frontend:url}/api/session/properties
+
+[postgresql-password]
+recipe = slapos.cookbook:generate.password
+
+[postgresql]
+recipe = slapos.cookbook:postgres
+bin = ${postgresql10:location}/bin
+services = $${directory:service}
+dbname  = metabase_db
+superuser = metabase-psql
+password = $${postgresql-password:passwd}
+pgdata-directory = $${directory:srv}/postgresql
+
+ipv4 = $${slap-configuration:ipv4-random}
+# disable listening on ipv6
+ipv6 =
+port = 5432
+
+promises = $${postgresql-promise:name}
+
+
+[postgresql-psql]
+recipe = slapos.cookbook:wrapper
+wrapper-path = $${directory:bin}/$${:_buildout_section_name_}
+command-line =
+    $${postgresql:bin}/psql
+        -h $${postgresql:pgdata-directory}
+        -U $${postgresql:superuser}
+        -d $${postgresql:dbname}
+
+[postgresql-promise]
+<= monitor-promise-base
+promise = check_command_execute
+name = promise-postgresql.py
+config-command = $${postgresql-psql:wrapper-path} -c '\q'
+
+[postgresql-backup-crontab-entry]
+recipe = slapos.cookbook:cron.d
+name = $${:_buildout_section_name_}
+cron-entries = $${cron:cron-entries}
+time = daily
+command = $${postgresql-backup:wrapper-path}
+
+[postgresql-backup]
+recipe = slapos.cookbook:wrapper
+wrapper-path = $${directory:bin}/$${:_buildout_section_name_}
+# XXX there's a recipe for backup in slapos cookbook, but it does not create
+# the backup file in an atomic way, which is not acceptable here, because we
+# don't want to risk pulling a partial file. To prevent this, we create a
+# temp file and move it when finished.
+command-line =
+    sh -c "$${postgresql:bin}/pg_dump \
+      -h $${postgresql:pgdata-directory} \
+      -U $${postgresql:superuser} \
+      --format=custom \
+      -f $${:backup-file}.tmp \
+      $${postgresql:dbname} \
+    && mv $${:backup-file}.tmp $${:backup-file}"
+backup-file = $${directory:srv-backup}/backup.pg_dump
+
+[postgresql-restore-backup]
+recipe = slapos.cookbook:wrapper
+wrapper-path = $${directory:bin}/$${:_buildout_section_name_}
+command-line =
+  sh -e -c "\
+    echo 'This will replace current database with latest backup. Hit Ctrl+C to cancel';
+    sleep 10;
+    $${postgresql:bin}/dropdb \
+        -h $${postgresql:pgdata-directory} \
+        -U $${postgresql:superuser} \
+        --if-exists \
+        $${postgresql:dbname};
+    $${postgresql:bin}/createdb \
+        -h $${postgresql:pgdata-directory} \
+        -U $${postgresql:superuser} \
+        $${postgresql:dbname};
+    $${postgresql:bin}/pg_restore \
+        --exit-on-error \
+        -h $${postgresql:pgdata-directory} \
+        -U $${postgresql:superuser} \
+        -d $${postgresql:dbname} \
+        $${postgresql-backup:backup-file}"
+
+[cron]
+recipe = slapos.cookbook:cron
+dcrond-binary = ${dcron-output:crond}
+cron-entries = $${directory:etc-cron.d}
+crontabs = $${directory:var-crontabs}
+cronstamps = $${directory:var-cronstamps}
+catcher = $${cron-simplelogger:wrapper}
+binary = $${directory:bin}/crond
+
+[cron-service]
+recipe = slapos.cookbook:wrapper
+command-line = $${cron:binary}
+wrapper-path = $${directory:services}/crond
+hash-existing-files = $${buildout:directory}/software_release/buildout.cfg
+
+[cron-simplelogger]
+recipe = slapos.cookbook:simplelogger
+wrapper = $${directory:bin}/cron_simplelogger
+log = $${directory:log}/cron.log
+
+
+[slap-configuration]
+recipe = slapos.cookbook:slapconfiguration
+computer = $${slap-connection:computer-id}
+partition = $${slap-connection:partition-id}
+url = $${slap-connection:server-url}
+key = $${slap-connection:key-file}
+cert = $${slap-connection:cert-file}
+
+[directory]
+recipe = slapos.cookbook:mkdirectory
+etc = $${buildout:directory}/etc
+etc-cron.d = $${:etc}/cron.d
+var = $${buildout:directory}/var
+var-crontabs = $${:var}/crontabs
+var-cronstamps = $${:var}/cronstamps
+var-cron-entries = $${:var}/cron-entries
+srv = $${buildout:directory}/srv
+bin = $${buildout:directory}/bin
+tmp = $${buildout:directory}/tmp
+run = $${buildout:directory}/run
+service = $${:etc}/service
+srv-metabase = $${:srv}/metabase
+srv-backup = $${:srv}/backup
+fontconfig-cache = $${buildout:directory}/.fontconfig
+
+[publish-connection-parameter]
+recipe = slapos.cookbook:publish
+url = $${metabase-frontend:url}
+backup-crontab = $${postgresql-backup-crontab-entry:name}
+restore-backup-script = $${postgresql-restore-backup:wrapper-path}

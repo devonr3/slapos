@@ -25,40 +25,122 @@
 #
 ##############################################################################
 
-import os, subprocess, sys
-import six
+import logging
+from zc.buildout.buildout import Buildout, MissingOption, MissingSection, \
+  dumps
+from zc.buildout import UserError
+
+NOOP_KEY = '-switch-softwaretype.noop'
+class SubBuildout(Buildout):
+  """Run buildout in buildout, partially copied from infrae.buildout
+  """
+  def __init__(self, main_buildout, config, options, **kwargs):
+    # Use same logger
+    self._logger = main_buildout._logger
+    self._log_level = main_buildout._log_level
+
+    # Use same options
+    for opt in (
+        'offline',
+        'verbosity',
+        'newest',
+        'directory',
+        'eggs-directory',
+        'develop-eggs-directory',
+    ):
+      if opt in main_buildout['buildout']:
+        options.append((
+            'buildout',
+            opt,
+            main_buildout['buildout'][opt],
+        ))
+    # Use same slap connection
+    for k, v in main_buildout["slap-connection"].items():
+      options.append(('slap-connection', k, v))
+    options.append((
+      'slap-configuration', NOOP_KEY, dumps(main_buildout["slap-configuration"])
+    ))
+    options.append((
+      'slap-configuration', 'recipe',
+      'slapos.cookbook:switch-softwaretype.noop'))
+
+    Buildout.__init__(self, config, options, **kwargs)
+
+  def _setup_logging(self):
+    """We don't want to setup any logging, since it's already done
+    by the main buildout.
+    """
+    pass
+
 
 class Recipe:
 
   def __init__(self, buildout, name, options):
+    self.logger = logging.getLogger(name)
     self.buildout = buildout
     self.options = options
     self.name = name
-    self.software_type = buildout["slap-configuration"]["slap-software-type"]
-    section, key = self.options[self.software_type].split(":")
+    try:
+      self.software_type = buildout["slap-configuration"]["slap-software-type"]
+    except (MissingSection, MissingOption):
+      raise UserError("The section to retrieve slap partition parameters "
+                      "(with slapos.cookbook:slapconfiguration recipe or a derived one) "
+                      "must be named [slap-configuration].")
+    try:
+      section, key = self.options[self.software_type].split(":")
+    except MissingOption:
+      # backward compatibility with previous default
+      if self.software_type == "RootSoftwareInstance":
+        self.software_type = "default"
+        try:
+          section, key = self.options[self.software_type].split(":")
+          self.logger.info("The software_type 'RootSoftwareInstance' is "
+                  "deprecated. We used 'default' instead. Please change the "
+                  "software_type of your instance to 'default'.")
+        except MissingOption:
+          raise MissingOption("The software type 'RootSoftwareInstance' isn't mapped. "
+                      "We even tried 'default' but it isn't mapped either.")
+      else:
+        raise MissingOption("This software type (%s) isn't mapped. 'default' "
+                        "is the default software type." % self.software_type)
+    except ValueError:
+      raise UserError("The software types in the section [%s] must be separated "
+                      "by a colon such as: 'section:key', where key is usually 'rendered'. "
+                      "Don't use: ${section:key}" % self.name)
     self.base = self.buildout[section][key]
 
   def install(self):
-    # XXX-Antoine: We gotta find a better way to do this. I tried to check
-    # out how slapgrid-cp was running buildout. But it is worse than that.
-    args = sys.argv[:]
-    for x in six.iteritems(self.buildout["slap-connection"]):
-      args.append("slap-connection:%s=%s" % x)
-    for x in "directory", "eggs-directory", "develop-eggs-directory":
-      args.append("buildout:%s=%s" % (x, self.buildout["buildout"][x]))
-    args.append("buildout:installed=.installed-%s.cfg" % self.name)
-    # Options.get (from zc.buildout) should deserialize.
+    options = [("buildout", "installed", ".installed-%s.cfg" % self.name)]
+    profile = self.base
     try:
-      override = self.options["override"][self.software_type]
+      # XXX this assume using slapos.buildout, which serializes arbitrary python objects for options
+      extended_profile = self.options["override"][self.software_type]
     except (KeyError, TypeError):
-      buildout = self.base
+      pass
     else:
-      # unfortunately, buildout:extends does not work when given at command line
-      buildout = os.path.join(self.buildout["buildout"]["parts-directory"],
-                              self.name + ".cfg")
-      with open(override) as src, open(buildout, "w", 0) as dst:
-        dst.write("[buildout]\nextends = %s\n\n" % self.base + src.read())
-    subprocess.check_call(args + ["-oc", buildout])
+      options.append(["buildout", "extends", profile])
+      profile = extended_profile
+
+    sub_buildout = SubBuildout(
+        self.buildout,
+        profile,
+        options,
+    )
+
+    sub_buildout.install([])
+
+  update = install
+
+class NoOperation:
+  def __init__(self, buildout, name, options):
+    self.buildout = buildout
+    self.options = options
+    self.name = name
+
+    for key, value in self.options.pop(NOOP_KEY).items():
+      self.options[key] = value
+
+  def install(self):
     return []
 
   update = install

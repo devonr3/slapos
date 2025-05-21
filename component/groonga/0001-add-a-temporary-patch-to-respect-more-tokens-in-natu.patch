@@ -1,0 +1,14 @@
+diff -ur groonga-15.0.4.orig/lib/ii.cpp groonga-15.0.4/lib/ii.cpp
+--- groonga-15.0.4.orig/lib/ii.cpp	2025-03-28 09:35:27.008520315 +0200
++++ groonga-15.0.4/lib/ii.cpp	2025-04-10 22:03:55.758925164 +0300
+@@ -12499,7 +12499,9 @@
+             ? ((uint32_t)(data->optarg->similarity_threshold) > GRN_HASH_SIZE(h)
+                  ? GRN_HASH_SIZE(h)
+                  : (uint32_t)(data->optarg->similarity_threshold))
+-            : (GRN_HASH_SIZE(h) >> 3) + 1;
++            : (GRN_HASH_SIZE(h) < 8
++               ? GRN_HASH_SIZE(h)
++               : ((GRN_HASH_SIZE(h) - 8) >> 3) + 8);
+   if (GRN_HASH_SIZE(h)) {
+     grn_id j, id;
+     float w2;

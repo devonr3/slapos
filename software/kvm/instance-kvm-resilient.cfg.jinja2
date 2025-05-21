@@ -13,7 +13,7 @@
 {% set monitor_dict = {'parameter': monitor_parameter, 'return': monitor_return} -%}
 {% endif -%}
 {% set monitor_interface_url = slapparameter_dict.pop('monitor-interface-url', 'https://monitor.app.officejs.com') -%}
-{% set additional_frontend = (slapparameter_dict.get('frontend-additional-instance-guid', '').strip() != '') %}
+{% set additional_frontend = slapparameter_dict.get('frontend-additional-instance-guid') or slapparameter_dict.get('frontend-additional-software-type') or slapparameter_dict.get('frontend-additional-software-url')%}
 
 [buildout]
 eggs-directory = {{ eggs_directory }}
@@ -61,6 +61,7 @@ etc = ${buildout:directory}/etc
 
 # Bubble down the parameters of the requested instance to the user
 [request-kvm]
+recipe = slapos.cookbook:request.serialised
 # Note: += doesn't work.
 return =
 # Resilient related parameters
@@ -102,13 +103,13 @@ mode = 700
 [kvm-frontend-url-promise]
 # Check that url parameter is complete
 <= monitor-promise-base
-module = check_command_execute
+promise = check_command_execute
 name = kvm-frontend-url.py
 config-command = ${kvm-frontend-url-bin:output}
 
 [kvm-backend-url-promise]
 # Check that backend url is reachable
 <= monitor-promise-base
-module = check_url_available
+promise = check_url_available
 name = frontend_promise.py
 config-url = ${publish-connection-information:url}

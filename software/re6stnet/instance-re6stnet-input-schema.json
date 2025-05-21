@@ -1,5 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-04/schema#",
+  "type": "object",
   "properties": {
     "ipv6-prefix": {
       "title": "Ipv6 prefix to use to setup the new re6st network",
@@ -78,6 +79,21 @@
       "description": "Prevent tunnelling accross borders of listed countries",
       "type": "string",
       "default": ""
+    },
+    "backup-repository": {
+      "title": "Git backup repository",
+      "description": "URL of Git repository where backups are pushed. Nothing is pushed if empty.",
+      "type": "string"
+    },
+    "community-conf": {
+      "title": "Community configuration",
+      "textarea": true,
+      "type": "string"
+    },
+    "grace-period": {
+      "title": "Period in seconds during which a client can renew its certificate even if expired (default 100 days)",
+      "type": "integer",
+      "default": 8640000
     }
   }
 }

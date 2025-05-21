@@ -29,10 +29,13 @@ import zc.buildout
 from slapos.recipe.librecipe import wrap
 from slapos.recipe.librecipe import GenericSlapRecipe
 import six
+import os
+import traceback
 
 CONNECTION_PARAMETER_STRING = 'connection-'
 
 class Recipe(GenericSlapRecipe):
+  return_list = []
   def __init__(self, buildout, name, options):
     super(Recipe, self).__init__(buildout, name, options)
     # Tell buildout about the sections we will access during install.
@@ -55,7 +58,7 @@ class Recipe(GenericSlapRecipe):
       for k in publish:
         publish_dict[k] = section[k]
     self._setConnectionDict(publish_dict, self.options.get('-slave-reference'))
-    return []
+    return self.return_list
 
   def _setConnectionDict(self, publish_dict, slave_reference=None):
     return self.setConnectionDict(publish_dict, slave_reference)
@@ -65,24 +68,41 @@ class Serialised(Recipe):
     return super(Serialised, self)._setConnectionDict(wrap(publish_dict), slave_reference)
 
 
+class Failsafe(object):
+  def _setConnectionDict(self, publish_dict, slave_reference):
+    error_status_file = self.options.get('-error-status-file')
+    # Note: We can't put -error-status-file in return list as by default it is
+    #       not present, and buildout wants the section to have it, so it
+    #       Uninstalls/Installs the part instead of just Updating it
+    self.return_list = []
+    try:
+      super(Failsafe, self)._setConnectionDict(publish_dict, slave_reference)
+    except Exception:
+      if error_status_file is not None:
+        with open(error_status_file, 'w') as fh:
+          fh.write(traceback.format_exc())
+    else:
+      if error_status_file is not None:
+        if os.path.exists(error_status_file):
+          os.unlink(error_status_file)
 
-class PublishSection(GenericSlapRecipe):
-  """
-  Take a list of "request" sections, and publish every connection parameter.
-  
-  Input:
-    section-list: String, representing the list of sections to fetch
-                  parameters to publish, in order, separated by a space.
-  """
-  def _install(self):
-    publish_dict = dict()
-    for section in self.options['section-list'].strip().split():
-      section = section.strip()
-      options = self.buildout[section].copy()
-      for k, v in six.iteritems(options):
-        if k.startswith(CONNECTION_PARAMETER_STRING):
-          print(k, v)
-          publish_dict[k.lstrip(CONNECTION_PARAMETER_STRING)] = v
-    self.setConnectionDict(publish_dict)
-    return []
+  def update(self):
+    error_status_file = self.options.get('-error-status-file')
+    if error_status_file is not None:
+      if os.path.exists(error_status_file):
+        # last run failed, so need to reinstall
+        self.install()
 
+  def uninstall(name, options):
+    error_status_file = options.get('-error-status-file')
+    if error_status_file is not None:
+      if os.path.exists(error_status_file):
+        os.unlink(error_status_file)
+
+
+class RecipeFailsafe(Failsafe, Recipe):
+  pass
+
+
+class SerialisedFailsafe(Failsafe, Serialised):
+  pass

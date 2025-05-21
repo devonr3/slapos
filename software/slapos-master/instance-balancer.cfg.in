@@ -2,14 +2,12 @@
 {% set part_list = [] -%}
 {% macro section(name) %}{% do part_list.append(name) %}{{ name }}{% endmacro -%}
 {% set ssl_parameter_dict = slapparameter_dict['ssl'] -%}
+{% set frontend_caucase_url_list = ssl_parameter_dict.get('frontend-caucase-url-list', []) -%}
 {% set shared_ca_path = slapparameter_dict.get('shared-certificate-authority-path') -%}
 {#
 XXX: This template only supports exactly one IPv4 and (if ipv6 is used) one IPv6
 per partition. No more (undefined result), no less (IndexError).
 -#}
-# TODO: insert varnish between apache & haproxy.
-# And think of a way to specify which urls goe through varnish, which go
-# directly to haproxy. (maybe just passing literal configuration file chunk)
 {% set ipv4 = (ipv4_set | list)[0] -%}
 {% set apache_ip_list = [ipv4] -%}
 {% if ipv6_set -%}
@@ -19,7 +17,6 @@ per partition. No more (undefined result), no less (IndexError).
 
 [jinja2-template-base]
 recipe = slapos.recipe.template:jinja2
-mode = 644
 
 {{ caucase.updater(
      prefix='caucase-updater',
@@ -41,10 +38,10 @@ mode = 644
 {% set haproxy_dict = {} -%}
 {% set apache_dict = {} -%}
 {% set zope_virtualhost_monster_backend_dict = {} %}
-{% set test_runner_url_dict = {} %} {# family_name => list of apache URLs #}
-{% set next_port = itertools.count(slapparameter_dict['tcpv4-port']).next -%}
+{% set test_runner_url_dict = {} %} {# family_name => list of URLs #}
+{% set next_port = functools.partial(next, itertools.count(slapparameter_dict['tcpv4-port'])) -%}
 {% for family_name, parameter_id_list in sorted(
-  slapparameter_dict['zope-family-dict'].iteritems()) -%}
+  six.iteritems(slapparameter_dict['zope-family-dict'])) -%}
 {%   set zope_family_address_list = [] -%}
 {%   set ssl_authentication = slapparameter_dict['ssl-authentication-dict'].get(family_name, False) -%}
 {%   set has_webdav = [] -%}
@@ -62,19 +59,19 @@ mode = 644
 {%     set test_runner_address_list = slapparameter_dict.get(parameter_id ~ '-test-runner-address-list', []) %}
 {%     if test_runner_address_list -%}
 {%       set test_runner_backend_mapping = {} %}
-{%       set test_runner_apache_url_list = [] %}
+{%       set test_runner_balancer_url_list = [] %}
 {%       set test_runner_external_port = next_port() %}
 {%       for i, (test_runner_internal_ip, test_runner_internal_port) in enumerate(test_runner_address_list) %}
 {%         do test_runner_backend_mapping.__setitem__(
                 'unit_test_' ~ i,
                 'http://' ~ test_runner_internal_ip ~ ':' ~ test_runner_internal_port ) %}
-{%         do test_runner_apache_url_list.append(
+{%         do test_runner_balancer_url_list.append(
                 'https://' ~ ipv4 ~ ':' ~ test_runner_external_port ~ '/unit_test_' ~ i ~ '/' ) %}
 {%       endfor %}
 {%       do zope_virtualhost_monster_backend_dict.__setitem__(
               (ipv4, test_runner_external_port),
               ( ssl_authentication, test_runner_backend_mapping ) ) -%}
-{%       do test_runner_url_dict.__setitem__(family_name, test_runner_apache_url_list) -%}
+{%       do test_runner_url_dict.__setitem__(family_name, test_runner_balancer_url_list) -%}
 {%     endif -%}
 {%   endfor -%}
 
@@ -106,16 +103,16 @@ ip = {{ ipv4 }}
 
 [haproxy-cfg]
 < = jinja2-template-base
-template = {{ parameter_dict['template-haproxy-cfg'] }}
-rendered = ${directory:etc}/haproxy.cfg
+url = {{ parameter_dict['template-haproxy-cfg'] }}
+output = ${directory:etc}/haproxy.cfg
 context = section parameter_dict haproxy-cfg-parameter-dict
 extensions = jinja2.ext.do
 
 [{{ section('haproxy') }}]
 recipe = slapos.cookbook:wrapper
 wrapper-path = ${directory:services}/haproxy
-command-line = "{{ parameter_dict['haproxy'] }}/sbin/haproxy" -f "${haproxy-cfg:rendered}"
-hash-files = ${haproxy-cfg:rendered}
+command-line = "{{ parameter_dict['haproxy'] }}/sbin/haproxy" -f "${haproxy-cfg:output}"
+hash-files = ${haproxy-cfg:output}
 
 [apache-conf-ssl]
 cert = ${directory:apache-conf}/apache.crt
@@ -126,21 +123,38 @@ caucase-key = ${directory:apache-conf}/apache-caucase.pem
 ca-cert =  ${directory:apache-conf}/ca.crt
 crl = ${directory:apache-conf}/crl.pem
 
+[simplefile]
+< = jinja2-template-base
+inline = {{ '{{ content }}' }}
+
+{% macro simplefile(section_name, file_path, content, mode='') -%}
+{%   set content_section_name = section_name ~ '-content' -%}
+[{{  content_section_name }}]
+content = {{ dumps(content) }}
+
+[{{  section(section_name) }}]
+< = simplefile
+output = {{ file_path }}
+context = key content {{content_section_name}}:content
+mode = {{ mode }}
+{%- endmacro %}
+
+
 [apache-ssl]
 {% if ssl_parameter_dict.get('key') -%}
-key = ${apache-ssl-key:rendered}
-cert = ${apache-ssl-cert:rendered}
+key = ${apache-ssl-key:output}
+cert = ${apache-ssl-cert:output}
 {{ simplefile('apache-ssl-key', '${apache-conf-ssl:key}', ssl_parameter_dict['key']) }}
 {{ simplefile('apache-ssl-cert', '${apache-conf-ssl:cert}', ssl_parameter_dict['cert']) }}
 {% else %}
 recipe = plone.recipe.command
-command = "{{ parameter_dict['openssl'] }}/bin/openssl" req -newkey rsa -batch -new -x509 -days 3650 -nodes -keyout "${:key}" -out "${:cert}"
+command = "{{ parameter_dict['openssl'] }}/bin/openssl" req -newkey rsa -batch -new -sha256 -x509 -days 3650 -nodes -keyout "${:key}" -out "${:cert}"
 key = ${apache-conf-ssl:key}
 cert = ${apache-conf-ssl:cert}
 {%- endif %}
 
 [apache-conf-parameter-dict]
-backend-list = {{ dumps(apache_dict.values()) }}
+backend-list = {{ dumps(list(apache_dict.values())) }}
 zope-virtualhost-monster-backend-dict = {{ dumps(zope_virtualhost_monster_backend_dict) }}
 ip-list = {{ dumps(apache_ip_list) }}
 pid-file = ${directory:run}/apache.pid
@@ -160,19 +174,21 @@ crl = ${apache-conf-ssl:crl}
 
 {% if shared_ca_path -%}
 shared-ca-cert = {{ shared_ca_path }}/cacert.pem
-shared-crl = {{ shared_ca_path }}/crl 
+{% if slapparameter_dict.get('check-crl') -%}
+shared-crl = {{ shared_ca_path }}/crl
+{%- endif %}
 {%- endif %}
 
 [apache-conf]
 < = jinja2-template-base
-template = {{ parameter_dict['template-apache-conf'] }}
-rendered = ${directory:apache-conf}/apache.conf
+url = {{ parameter_dict['template-apache-conf'] }}
+output = ${directory:apache-conf}/apache.conf
 context = section parameter_dict apache-conf-parameter-dict
 
 [{{ section('apache') }}]
 recipe = slapos.cookbook:wrapper
 wrapper-path = ${directory:services}/apache
-command-line = "{{ parameter_dict['apache'] }}/bin/httpd" -f "${apache-conf:rendered}" -DFOREGROUND
+command-line = "{{ parameter_dict['apache'] }}/bin/httpd" -f "${apache-conf:output}" -DFOREGROUND
 wait-for-files =
   ${apache-conf-ssl:cert}
   ${apache-conf-ssl:key}
@@ -188,10 +204,10 @@ input = inline:
 [{{ section('apache-promise') }}]
 # Check any apache port in ipv4, expect other ports and ipv6 to behave consistently
 <= monitor-promise-base
-module = check_port_listening
+promise = check_socket_listening
 name = apache.py
-config-hostname = {{ ipv4 }}
-config-port = {{ apache_dict.values()[0][0] }}
+config-host = {{ ipv4 }}
+config-port = {{ list(apache_dict.values())[0][0] }}
 
 [{{ section('publish') }}]
 recipe = slapos.cookbook:publish.serialised
@@ -247,8 +263,8 @@ apachedex = ${monitor-directory:private}/apachedex
 [{{ section('resiliency-exclude-file') }}]
 # Generate rdiff exclude file in case of resiliency
 < = jinja2-template-base
-template = {{ 'inline:{{ "${directory:log}/**\\n" }}' }}
-rendered = ${directory:srv}/exporter.exclude
+inline = {{ '{{ "${directory:log}/**\\n" }}' }}
+output = ${directory:srv}/exporter.exclude
 
 [{{ section('monitor-generate-apachedex-report') }}]
 recipe = slapos.cookbook:cron.d
@@ -262,25 +278,33 @@ command = ${monitor-generate-apachedex-report-wrapper:wrapper-path}
 [monitor-generate-apachedex-report-wrapper]
 recipe = slapos.cookbook:wrapper
 wrapper-path = ${directory:bin}/${:command}
-command-line = "{{ parameter_dict['run-apachedex-location'] }}" "{{ parameter_dict['apachedex-location'] }}" "${directory:apachedex}" ${monitor-publish-parameters:monitor-base-url}/private/apachedex --apache-log-list "${apachedex-parameters:apache-log-list}" --configuration "${apachedex-parameters:configuration}"
+command-line = "{{ parameter_dict['run-apachedex-location'] }}" "{{ parameter_dict['apachedex-location'] }}" "${directory:apachedex}" ${monitor-publish-parameters:monitor-base-url}/private/apachedex --apache-log-list "${apachedex-parameters:apache-log-list}" --configuration ${apachedex-parameters:configuration}
 command = generate-apachedex-report
 
+[monitor-apachedex-report-config]
+recipe = slapos.recipe.template
+output = ${directory:etc}/${:_buildout_section_name_}
+inline =
+  {% for line in slapparameter_dict['apachedex-configuration'] %}
+    {# apachedex config files use shlex.split, so we need to quote the arguments. #}
+    {# BBB: in python 3 we can use shlex.quote instead. #}
+    {{ repr(line.encode('utf-8')) }}
+  {% endfor %}
+
 [apachedex-parameters]
-# XXX - Sample log file with curent date: apache_access.log-%(date)s.gz
-# which will be equivalent to apache_access.log-20150112.gz if the date is 2015-01-12
 apache-log-list = ${apache-conf-parameter-dict:access-log}
-configuration = {{ slapparameter_dict['apachedex-configuration'] }}
+configuration = ${monitor-apachedex-report-config:output}
 promise-threshold = {{ slapparameter_dict['apachedex-promise-threshold'] }}
 
 [{{ section('monitor-promise-apachedex-result') }}]
 <= monitor-promise-base
-module = check_command_execute
+promise = check_command_execute
 name = check-apachedex-result.py
 config-command = "{{ parameter_dict['promise-check-apachedex-result'] }}" --apachedex_path "${directory:apachedex}" --status_file ${monitor-directory:private}/apachedex.report.json --threshold "${apachedex-parameters:promise-threshold}"
 
 [{{ section('promise-check-computer-memory') }}]
 <= monitor-promise-base
-module = check_command_execute
+promise = check_command_execute
 name = check-computer-memory.py
 config-command = "{{ parameter_dict["check-computer-memory-binary"] }}" -db ${monitor-instance-parameter:collector-db} --threshold "{{ slapparameter_dict["computer-memory-percent-threshold"] }}" --unit percent
 

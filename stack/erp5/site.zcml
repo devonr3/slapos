@@ -21,6 +21,8 @@
 
 
   <securityPolicy
-      component="Products.Five.security.FiveSecurityPolicy" />
+      component="AccessControl.security.SecurityPolicy" />
+
+  <include package="haufe.requestmonitoring" file="monitor.zcml"/>
 
 </configure>

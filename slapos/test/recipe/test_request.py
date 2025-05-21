@@ -39,7 +39,7 @@ class RecipeTestMixin(object):
        'No parameter to return to main instance.Be careful about that...'),
     )
     self.request_instance.assert_called_with(
-      '', 'RootSoftwareInstance', '', filter_kw={},
+      '', 'default', '', filter_kw={},
       partition_parameter_kw=self.called_partition_parameter_kw,
       shared=False, state='started')
 
@@ -53,7 +53,7 @@ class RecipeTestMixin(object):
       self.recipe(self.buildout, "request", options)
     log.check()
     self.request_instance.assert_called_with(
-      '', 'RootSoftwareInstance', '', filter_kw={},
+      '', 'default', '', filter_kw={},
       partition_parameter_kw=self.called_partition_parameter_kw,
       shared=False, state='started')
 
@@ -69,7 +69,7 @@ class RecipeTestMixin(object):
       self.assertRaises(KeyError, recipe.install)
     self.assertEqual(options['connection-anything'], '')
     self.request_instance.assert_called_with(
-      '', 'RootSoftwareInstance', '', filter_kw={},
+      '', 'default', '', filter_kw={},
       partition_parameter_kw=self.called_partition_parameter_kw,
       shared=False, state='started')
 
@@ -85,10 +85,39 @@ class RecipeTestMixin(object):
     self.assertEqual(options['connection-anything'], 'done')
     self.assertIsInstance(options['connection-anything'], str)
     self.request_instance.assert_called_with(
-      '', 'RootSoftwareInstance', '', filter_kw={},
+      '', 'default', '', filter_kw={},
       partition_parameter_kw=self.called_partition_parameter_kw,
       shared=False, state='started')
 
+  def test_requester_stopped_state_propagated(self):
+    options = defaultdict(str)
+    options['return'] = 'anything'
+    self.buildout['slap-connection']['requested'] = 'stopped'
+
+    self.instance_getConnectionParameter.return_value = self.return_value_empty
+
+    with LogCapture() as log:
+      self.recipe(self.buildout, "request", options)
+    log.check()
+    self.request_instance.assert_called_with(
+      '', 'default', '', filter_kw={},
+      partition_parameter_kw=self.called_partition_parameter_kw,
+      shared=False, state='stopped')
+
+  def test_requester_destroyed_state_not_propagated(self):
+    options = defaultdict(str)
+    options['return'] = 'anything'
+    self.buildout['slap-connection']['requested'] = 'destroyed'
+
+    self.instance_getConnectionParameter.return_value = self.return_value_empty
+
+    with LogCapture() as log:
+      self.recipe(self.buildout, "request", options)
+    log.check()
+    self.request_instance.assert_called_with(
+      '', 'default', '', filter_kw={},
+      partition_parameter_kw=self.called_partition_parameter_kw,
+      shared=False, state='started')
 
 class RecipeTest(RecipeTestMixin, unittest.TestCase):
   recipe = request.Recipe

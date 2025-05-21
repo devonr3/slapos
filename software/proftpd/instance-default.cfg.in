@@ -1,6 +1,9 @@
 [buildout]
 parts =
   promises
+  cron-service
+  cron-entry-logrotate
+  logrotate-entry-proftpd
   publish-connection-parameter
 
 extends = {{ template_monitor }}
@@ -35,9 +38,8 @@ ssh-authorized-keys-dir = ${:etc}/authorized_keys/
 
 [config-file]
 recipe = slapos.recipe.template:jinja2
-template = {{ software_parts_directory }}/${:_buildout_section_name_}/${:_buildout_section_name_}.cfg.in
-rendered = ${directory:etc}/${:_buildout_section_name_}.cfg
-mode = 0644
+url = {{ software_parts_directory }}/${:_buildout_section_name_}/${:_buildout_section_name_}.cfg.in
+output = ${directory:etc}/${:_buildout_section_name_}.cfg
 extensions = jinja2.ext.do
 
 [proftpd-userinfo]
@@ -47,7 +49,6 @@ recipe = slapos.cookbook:userinfo
 [proftpd-password]
 recipe = slapos.cookbook:generate.password
 username = proftpd
-bytes = 12
 
 [proftpd]
 ipv6 = ${instance-parameter:ipv6-random}
@@ -64,23 +65,30 @@ sftp-log=${directory:log}/proftpd-sftp.log
 xfer-log=${directory:log}/proftpd-xfer.log
 ban-log=${directory:log}/proftpd-ban.log
 ssh-host-rsa-key=${ssh-host-rsa-key:output}
-ssh-host-dsa-key=${ssh-host-dsa-key:output}
 ssh-host-ecdsa-key=${ssh-host-ecdsa-key:output}
-ssh-authorized-keys-dir = ${directory:ssh-authorized-keys-dir}
+ssh-authorized-key = ${ssh-authorized-keys:output}
 ban-table=${directory:srv}/proftpd-ban-table
 control-socket=${directory:var}/proftpd.sock
 auth-user-file=${auth-user-file:output}
+authentication-url = {{ slapparameter_dict.get('authentication-url', '')}}
 
 recipe = slapos.cookbook:wrapper
 command-line =
-   {{ proftpd_bin }} --nodaemon --config ${proftpd-config-file:rendered}
+   {{ proftpd_bin }} --nodaemon --config ${proftpd-config-file:output}
 wrapper-path = ${directory:service}/proftpd
+
+[ssh-authorized-keys]
+output = ${directory:ssh-authorized-keys-dir}/authorized_keys
+{% if slapparameter_dict.get('ssh-key') %}
+recipe = slapos.recipe.template
+inline ={{ slapparameter_dict['ssh-key'] | indent }}
+{% endif %}
 
 [proftpd-listen-promise]
 <= monitor-promise-base
-module = check_port_listening
+promise = check_socket_listening
 name = ${:_buildout_section_name_}.py
-config-hostname = ${proftpd:ipv6}
+config-host = ${proftpd:ipv6}
 config-port = ${proftpd:sftp-port}
 
 
@@ -91,7 +99,7 @@ config-port = ${proftpd:sftp-port}
 recipe = slapos.cookbook:wrapper
 wrapper-path =${buildout:bin-directory}/${:_buildout_section_name_}
 command-line =
-  {{ perl_bin }} {{ ftpasswd_bin }} --passwd --home=${proftpd:data-dir} --shell=/bin/false --uid=${proftpd-userinfo:pw-uid} --gid=${proftpd-userinfo:gr-gid}  --file ${auth-user-file:output}
+  {{ ftpasswd_bin }} --passwd --home=${proftpd:data-dir} --shell=/bin/false --uid=${proftpd-userinfo:pw-uid} --gid=${proftpd-userinfo:gr-gid}  --file ${auth-user-file:output}
 
 [auth-user-file]
 recipe = plone.recipe.command
@@ -109,9 +117,6 @@ command = {{ ssh_keygen_bin }} -f ${:output} -N '' ${:extra-args}
 [ssh-host-rsa-key]
 <=ssh-keygen-base
 extra-args=-t rsa
-[ssh-host-dsa-key]
-<=ssh-keygen-base
-extra-args=-t dsa
 [ssh-host-ecdsa-key]
 <=ssh-keygen-base
 extra-args=-t ecdsa -b 521
@@ -129,9 +134,22 @@ recipe =
 instance-promises =
   ${proftpd-listen-promise:name}
 
+[logrotate-entry-proftpd]
+<= logrotate-entry-base
+name = proftpd
+log =
+  ${proftpd:sftp-log}
+  ${proftpd:xfer-log}
+  ${proftpd:ban-log}
+post =
+  test ! -s ${proftpd:pid-file} || kill -HUP $(cat "${proftpd:pid-file}")
 
 [publish-connection-parameter]
 recipe = slapos.cookbook:publish
 url = ${proftpd:url}
+{% if not slapparameter_dict.get('authentication-url') %}
 username = ${proftpd-password:username}
+{%   if not slapparameter_dict.get('ssh-key') %}
 password = ${proftpd-password:passwd}
+{%   endif %}
+{% endif %}

@@ -21,7 +21,7 @@ Extend monitor template and a monitor-base to parts:
 
     [buildout]
     extends = 
-      ${monitor-template:rendered}
+      ${monitor-template:output}
     parts = 
       ...
       monitor-base
@@ -77,9 +77,9 @@ If you have sub-instances, you should collect the base monitor url from all inst
 
 Also, all monitors of the sub instances need to have same password as the password of the root instance monitor.
 
-NB: You should use double $ (ex: $${monitor-template:rendered}) instead of one $ in your instance template file if it's not a jinja template. See:
-- Jinja template file exemple, use one $: https://lab.nexedi.com/nexedi/slapos/blob/master/software/slaprunner/instance-resilient-test.cfg.jinja2
-- Non Jinja template file, use $$: https://lab.nexedi.com/nexedi/slapos/blob/master/software/slaprunner/instance.cfg
+NB: You should use double $ (ex: $${monitor-template:output}) instead of one $ in your instance template file if it's not a jinja template. See:
+- Jinja template file exemple, use one $: https://lab.nexedi.com/nexedi/slapos/blob/master/software/theia/instance-resilient.cfg.jinja
+- Non Jinja template file, use $$: https://lab.nexedi.com/nexedi/slapos/blob/master/software/theia/instance.cfg.in
 
 Add a promise
 -------------
@@ -94,20 +94,18 @@ New promises should be placed into the folder etc/plugin, legacy promises are in
 You will use slapos.cookbook:promise.plugin to generate your promise script into `etc/plugin` directory. Adding a promise will look like this:
 
     [promise-check-site]
-    recipe = slapos.cookbook:promise.plugin
-    eggs =
-      slapos.toolbox
-    output = ${directory:plugins}/promise-check-mysite-status.py
-    content = 
-      from slapos.promise.plugin.check_site_state import RunPromise
-    config-site-url = ${publish:site-url}
-    config-connection-timeout = 20
+    <= monitor-promise-base
+    module = check_socket_listening
+    name = check_site.py
+    config-host = ${publish:ipv6}
+    config-port = 2020
     config-foo = bar
-    mode = 600
+
+The section `monitor-promise-base` is defined in the monitor stack, `name` is the filename of the script that will be generated under `etc/plugin` directory, `module` is the name of your promise module (you can find a list of existing module in https://lab.nexedi.com/nexedi/slapos.toolbox/tree/master/slapos/promise/plugin).
 
 Then you will have to add `promise-check-site` section to buildout parts, so it will be installed.
 
-In your promise code, you will be able to call `self.getConfig('site-url')`, `self.getConfig('connection-timeout')` and `self.getConfig('foo')`. The returned value is `None` if the config parameter is not set.
+In your promise code, you will be able to call `self.getConfig('hostname')`, `self.getConfig('port')` and `self.getConfig('foo')`. The returned value is `None` if the config parameter is not set.
 
 Slapgrid will run each promise every time a partition is processed (every minutes in theory), if the partition is up to date, slapgrid will only run promises anomaly check and save the result in a json file. Here is an exemple of promise result:
 

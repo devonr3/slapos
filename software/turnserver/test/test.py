@@ -29,7 +29,7 @@ import os
 import subprocess
 import json
 import glob
-import ConfigParser
+import configparser
 
 from slapos.recipe.librecipe import generateHashFromFiles
 from slapos.testing.testcase import makeModuleSetUpAndTestCaseClass
@@ -59,6 +59,12 @@ class TurnServerTestCase(InstanceTestCase):
 
 
 class TestServices(TurnServerTestCase):
+
+  @classmethod
+  def getInstanceParameterDict(cls):
+    return {
+      'listening-ip': cls._ipv4_address
+    }
 
   def test_process_list(self):
     hash_list = [
@@ -90,7 +96,7 @@ class TestServices(TurnServerTestCase):
     secret_file = os.path.join(self.partition_path, 'etc/.turnsecret')
     self.assertTrue(os.path.exists(self.partition_path))
     self.assertTrue(os.path.exists(secret_file))
-    config = ConfigParser.ConfigParser()
+    config = configparser.ConfigParser()
     with open(secret_file) as f:
       config.readfp(f)
     secret = config.get('turnserver', 'secret')
@@ -118,6 +124,7 @@ mobility
 no-tlsv1
 no-tlsv1_1
 no-stdout-log
+simple-log
 log-file=%(instance_path)s/var/log/turnserver.log
 userdb=%(instance_path)s/srv/turndb
 pidfile=%(instance_path)s/var/run/turnserver.pid
@@ -137,14 +144,14 @@ class TestParameters(TurnServerTestCase):
       'port': 3488,
       'tls-port': 5369,
       'external-ip': '127.0.0.1',
-      'listening-ip': '127.0.0.1'
+      'listening-ip': cls._ipv4_address
     }
 
   def test_turnserver_with_parameters(self):
     secret_file = os.path.join(self.partition_path, 'etc/.turnsecret')
     self.assertTrue(os.path.exists(self.partition_path))
     self.assertTrue(os.path.exists(secret_file))
-    config = ConfigParser.ConfigParser()
+    config = configparser.ConfigParser()
     with open(secret_file) as f:
       config.readfp(f)
     secret = config.get('turnserver', 'secret')
@@ -173,12 +180,13 @@ mobility
 no-tlsv1
 no-tlsv1_1
 no-stdout-log
+simple-log
 log-file=%(instance_path)s/var/log/turnserver.log
 userdb=%(instance_path)s/srv/turndb
 pidfile=%(instance_path)s/var/run/turnserver.pid
 verbose""" % {'instance_path': self.partition_path,
               'secret': secret,
-              'ipv4': '127.0.0.1',
+              'ipv4': self._ipv4_address,
               'name': 'turn.site.com',
               'external_ip': '127.0.0.1',
               'port': 3488,
@@ -188,3 +196,67 @@ verbose""" % {'instance_path': self.partition_path,
       current_config = f.read().strip()
 
     self.assertEqual(current_config.splitlines(), expected_config.splitlines())
+
+class TestInsecureServices(TurnServerTestCase):
+
+  @classmethod
+  def getInstanceParameterDict(cls):
+    return {
+      'listening-ip': cls._ipv4_address
+    }
+
+  @classmethod
+  def getInstanceSoftwareType(cls):
+    return 'insecure'
+
+  def test_process_list(self):
+    hash_list = [
+      'software_release/buildout.cfg',
+    ]
+    expected_process_names = [
+      'bootstrap-monitor',
+      'turnserver-{hash}-on-watch',
+      'certificate_authority-{hash}-on-watch',
+      'crond-{hash}-on-watch',
+      'monitor-httpd-{hash}-on-watch',
+      'monitor-httpd-graceful',
+    ]
+
+    with self.slap.instance_supervisor_rpc as supervisor:
+      process_name_list = [process['name']
+                     for process in supervisor.getAllProcessInfo()]
+
+    hash_file_list = [os.path.join(self.computer_partition_root_path, path)
+                      for path in hash_list]
+
+    for name in expected_process_names:
+      h = generateHashFromFiles(hash_file_list)
+      expected_process_name = name.format(hash=h)
+
+      self.assertIn(expected_process_name, process_name_list)
+
+  def test_default_deployment(self):
+    self.assertTrue(os.path.exists(self.partition_path))
+    connection_parameter_dict = self.computer_partition\
+      .getConnectionParameterDict()
+    password = connection_parameter_dict['password']
+
+
+    expected_config = """listening-port=3478
+lt-cred-mech
+realm=turn.example.com
+fingerprint
+listening-ip=%(ipv4)s
+server-name=turn.example.com
+no-stdout-log
+simple-log
+log-file=%(instance_path)s/var/log/turnserver.log
+pidfile=%(instance_path)s/var/run/turnserver.pid
+verbose
+user=nxdturn:%(password)s""" % {'instance_path': self.partition_path, 'password': password, 'ipv4': self._ipv4_address}
+
+    with open(os.path.join(self.partition_path, 'etc/turnserver.conf')) as f:
+      current_config = f.read().strip()
+
+    self.assertEqual(current_config.splitlines(), expected_config.splitlines())
+

@@ -6,15 +6,28 @@ eggs-directory = ${buildout:eggs-directory}
 develop-eggs-directory = ${buildout:develop-eggs-directory}
 offline = true
 
-[switch-softwaretype]
-recipe = slapos.cookbook:softwaretype
-default = ${template-selenium:output}
+[dynamic-template-selenium]
+recipe = slapos.recipe.template:jinja2
+url = ${template-selenium:output}
+output = $${buildout:parts-directory}/$${:_buildout_section_name_}/$${:filename}
+filename = instance-selenium.cfg
+context =
+    jsonkey default_parameter_dict :default-parameters
+    key parameter_dict slap-configuration:configuration
+    key partition_ipv6 slap-configuration:ipv6-random
+default-parameters =
+  {
+    "slotQuantity": 3
+  }
 
-[slap-connection]
-# part to migrate to new - separated words
-computer-id = $${slap_connection:computer_id}
-partition-id = $${slap_connection:partition_id}
-server-url = $${slap_connection:server_url}
-software-release-url = $${slap_connection:software_release_url}
-key-file = $${slap_connection:key_file}
-cert-file = $${slap_connection:cert_file}
+[switch-softwaretype]
+recipe = slapos.cookbook:switch-softwaretype
+default = dynamic-template-selenium:output
+
+[slap-configuration]
+recipe = slapos.cookbook:slapconfiguration
+computer = $${slap-connection:computer-id}
+partition = $${slap-connection:partition-id}
+url = $${slap-connection:server-url}
+key = $${slap-connection:key-file}
+cert = $${slap-connection:cert-file}

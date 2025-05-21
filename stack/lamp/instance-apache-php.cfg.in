@@ -13,12 +13,21 @@ parts =
   php.ini-conf
   apache-php-service
   publish-connection-information
+  lamp-apache-httpd
   {{ parameter_dict['application-part-list'] }}
 
 
 eggs-directory = {{ eggs_directory }}
 develop-eggs-directory = {{ develop_eggs_directory }}
 offline = true
+
+
+#----------------
+#--
+#-- Monitor password aggregation.
+
+[monitor-instance-parameter]
+password = {{ slapparameter_dict['monitor-passwd'] }}
 
 
 #----------------
@@ -133,19 +142,25 @@ cert-file = ${ca-directory:certs}/httpd.crt
 key-file = ${ca-directory:certs}/httpd.key
 apache-config-dir = ${directory:apache.d}
 
+[lamp-apache-httpd]
+recipe = slapos.recipe.template:jinja2
+url = {{ lamp_apache_httpd }}
+output = ${directory:apache.d}/lamp.conf
+context =
+  section parameter_dict apache-php-configuration
+
 [apache-php-conf]
 recipe = slapos.recipe.template:jinja2
-template = {{ parameter_dict['template-apache-conf'] }}
-rendered = ${directory:etc}/apache.conf
-context = 
+url = {{ parameter_dict['template-apache-conf'] }}
+output = ${directory:etc}/apache.conf
+context =
   section parameter_dict apache-php-configuration
 extensions = jinja2.ext.do
-mode = 0644
 
 [apache-php-wrapper]
 recipe = slapos.cookbook:wrapper
 wrapper-path = ${directory:bin}/apache-wrapper
-command-line = "{{ parameter_dict['apache-location'] }}/bin/httpd" -f "${apache-php-conf:rendered}" -DFOREGROUND
+command-line = "{{ parameter_dict['apache-location'] }}/bin/httpd" -f "${apache-php-conf:output}" -DFOREGROUND
 wait-for-files =
   ${ca-directory:certs}/httpd.crt
   ${ca-directory:certs}/httpd.key
@@ -171,13 +186,12 @@ php-upload-dir = ${directory:upload-tmp}
 
 [php.ini-conf]
 recipe = slapos.recipe.template:jinja2
-template = {{ parameter_dict['template-php-ini'] }}
-rendered = ${directory:php-ini-dir}/php.ini
-context = 
+url = {{ parameter_dict['template-php-ini'] }}
+output = ${directory:php-ini-dir}/php.ini
+context =
   section parameter_dict php.ini-configuration
   section instance_dict instance-parameter
 extensions = jinja2.ext.do
-mode = 0644
 
 [instance-parameter]
 db-user = ${mariadb-urlparse:username}
@@ -188,8 +202,25 @@ db-port = ${mariadb-urlparse:port}
 document-root = ${apache-php-configuration:document-root}
 backend-url = ${apache-php-configuration:url}
 php-bin = {{ parameter_dict['apache-php-location'] }}/bin/php
-php-ini = ${php.ini-conf:rendered}
+php-ini = ${php.ini-conf:output}
 
+#Defaut php.ini parameters
+#They have been set in file php.ini.in
+#I reserve them here just for an example
+#You can reset them like this in your own software
+php.memory_limit = 512M
+php.date.timezone = Europe/Paris
+php.upload_max_filesize = 10240M
+php.post_max_size = 10240M
+php.session.cookie_secure = True
+php.max_execution_time = 1800
+php.max_input_time = 3600
+php.max_file_uploads = 100
+
+[php-bin]
+recipe = slapos.cookbook:wrapper
+wrapper-path = ${directory:bin}/php
+command-line = ${instance-parameter:php-bin} -c ${php.ini-conf:output}
 
 #----------------
 #--
@@ -199,6 +230,27 @@ php-ini = ${php.ini-conf:rendered}
 <= monitor-publish
 recipe = slapos.cookbook:publish.serialised
 backend-url = ${apache-php-configuration:url}
+{% if parameter_dict['publish-frontend'] -%}
+url = ${lamp-frontend-promise:url}
+{% endif -%}
+
+[request-frontend]
+<= slap-connection
+recipe = slapos.cookbook:requestoptional
+name = Instance Frontend
+# XXX We have hardcoded SR URL here.
+software-url = http://git.erp5.org/gitweb/slapos.git/blob_plain/HEAD:/software/apache-frontend/software.cfg
+shared = true
+config-url = ${apache-php-configuration:url}
+config-https-only = true
+return = domain secure_access
+
+[lamp-frontend-promise]
+<= monitor-promise-base
+promise = check_url_available
+name = lamp-http-frontend.py
+url = ${request-frontend:connection-secure_access}
+config-url = ${:url}
 
 
 #----------------
@@ -207,9 +259,9 @@ backend-url = ${apache-php-configuration:url}
 [promise]
 # Check any apache port in ipv4, expect other ports and ipv6 to behave consistently
 <= monitor-promise-base
-module = check_port_listening
+promise = check_socket_listening
 name = apache-httpd-port-listening.py
-config-hostname = ${apache-php-configuration:ip}
+config-host = ${apache-php-configuration:ip}
 config-port = ${apache-php-configuration:port}
 
 [slap-parameter]

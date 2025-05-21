@@ -6,7 +6,7 @@
 {% set monitor_url_list = [] -%}
 # prepare sla-parameters
 {% if slapparameter_dict is defined -%}
-{%   for key in slapparameter_dict.keys() -%}
+{%   for key in list(slapparameter_dict.keys()) -%}
 {%     if key.startswith('-sla-') -%}
 {%       do sla_parameter_dict.__setitem__(key, slapparameter_dict.pop(key)) -%}
 {%     endif -%}
@@ -42,35 +42,31 @@ config-name = {{namebase}}0
 # Bubble up all the instance parameters to the requested export instance.
 {% if slapparameter_dict is defined %}
 {% for parameter_name, parameter_value in six.iteritems(slapparameter_dict) %}
-{% if parameter_value is string %}
-config-{{parameter_name}} = {{ parameter_value.split('\n') | join('\n  ') }}
-{% else %}
-config-{{parameter_name}} = {{ parameter_value }}
-{% endif %}
+config-{{ parameter_name }} = {{ dumps(parameter_value) }}
 {% endfor %}
 {% endif %}
 {% for key, value in six.iteritems(monitor_dict) -%}
 config-{{ key }} = {{ value }}
 {% endfor -%}
-{% if sla_parameter_dict == {} -%}
+{% set sla_key_main = "-sla-%s%s-" % (namebase, 0) -%}
+{% set sla_key_secondary = "-sla-%s-" % (0) -%}
+{% set sla_key_main_length = sla_key_main | length -%}
+{% set sla_key_secondary_length = sla_key_secondary | length -%}
+{% set sla_dict = {} -%}
+{% for key in sla_parameter_dict.keys() -%}
+{%   if key.startswith(sla_key_main) -%}
+{%     do sla_dict.__setitem__(key[sla_key_main_length:], sla_parameter_dict.get(key)) -%}
+{%   elif key.startswith(sla_key_secondary) and key[sla_key_secondary_length:] not in sla_dict -%}
+{%       do sla_dict.__setitem__(key[sla_key_secondary_length:], sla_parameter_dict.get(key)) -%}
+{%   endif -%}
+{% endfor -%}
+{% if sla_dict == {} %}
 sla-mode = unique_by_network
 {% else %}
-{%   set sla_key_main = "-sla-%s%s-" % (namebase, 0) -%}
-{%   set sla_key_secondary = "-sla-%s-" % (0) -%}
-{%   set sla_key_main_length = sla_key_main | length -%}
-{%   set sla_key_secondary_length = sla_key_secondary | length -%}
-{%   set sla_dict = {} -%}
-{%   for key in sla_parameter_dict.keys() -%}
-{%     if key.startswith(sla_key_main) -%}
-{%       do sla_dict.__setitem__(key[sla_key_main_length:], sla_parameter_dict.get(key)) -%}
-{%     elif key.startswith(sla_key_secondary) and not sla_dict.has_key(key[sla_key_secondary_length:]) -%}
-{%         do sla_dict.__setitem__(key[sla_key_secondary_length:], sla_parameter_dict.get(key)) -%}
-{%     endif -%}
-{%   endfor -%}
 {%   for key, value in six.iteritems(sla_dict) -%}
 sla-{{ key }} = {{ value }}
-{%   endfor -%}
-{% endif -%}
+{%   endfor %}
+{% endif %}
 
 {% if 'monitor-base-url' in monitor_return and not monitor_parameter_dict.get('set-monitor-url', False) -%}
 {% do monitor_url_list.append('${request-' ~ namebase ~ ':connection-monitor-base-url}') -%}
@@ -91,7 +87,7 @@ return = ssh-public-key resilient-ssh-url notification-url ip takeover-url takeo
 
 pbs-notification-id = ${slap-connection:computer-id}-${slap-connection:partition-id}-{{namebase}}-{{id}}-push
 
-{% for extra_parameter_for_pseudo_replicating_instance in ["software-root", "buildout-shared-folder"] %}
+{% for extra_parameter_for_pseudo_replicating_instance in ["software-root", "buildout-shared-folder", "testing-short-embedded-instance-path"] %}
 {% if slapparameter_dict.get(extra_parameter_for_pseudo_replicating_instance) %}
 config-{{ extra_parameter_for_pseudo_replicating_instance }} = {{ slapparameter_dict.get(extra_parameter_for_pseudo_replicating_instance) }}
 {% endif %}
@@ -104,24 +100,24 @@ config-on-notification = ${request-pbs-{{namebase}}-{{id}}:connection-feeds-url}
 {% for key, value in six.iteritems(monitor_dict) -%}
 config-{{ key }} = {{ value }}
 {% endfor -%}
-{% if sla_parameter_dict == {} -%}
+{% set sla_key_main = "-sla-%s%s-" % (namebase, id) -%}
+{% set sla_key_secondary = "-sla-%s-" % (id) -%}
+{% set sla_key_main_length = sla_key_main | length -%}
+{% set sla_key_secondary_length = sla_key_secondary | length -%}
+{% set sla_dict = {} -%}
+{% for key in sla_parameter_dict.keys() -%}
+{%   if key.startswith(sla_key_main) -%}
+{%     do sla_dict.__setitem__(key[sla_key_main_length:], sla_parameter_dict.get(key)) -%}
+{%   elif key.startswith(sla_key_secondary) and key[sla_key_secondary_length:] not in sla_dict -%}
+{%       do sla_dict.__setitem__(key[sla_key_secondary_length:], sla_parameter_dict.get(key)) -%}
+{%   endif -%}
+{% endfor -%}
+{% if sla_dict == {} %}
 sla-mode = unique_by_network
 {% else %}
-{%   set sla_key_main = "-sla-%s%s-" % (namebase, id) -%}
-{%   set sla_key_secondary = "-sla-%s-" % (id) -%}
-{%   set sla_key_main_length = sla_key_main | length -%}
-{%   set sla_key_secondary_length = sla_key_secondary | length -%}
-{%   set sla_dict = {} -%}
-{%   for key in sla_parameter_dict.keys() -%}
-{%     if key.startswith(sla_key_main) -%}
-{%       do sla_dict.__setitem__(key[sla_key_main_length:], sla_parameter_dict.get(key)) -%}
-{%     elif key.startswith(sla_key_secondary) and not sla_dict.has_key(key[sla_key_secondary_length:]) -%}
-{%         do sla_dict.__setitem__(key[sla_key_secondary_length:], sla_parameter_dict.get(key)) -%}
-{%     endif -%}
-{%   endfor -%}
 {%   for key, value in six.iteritems(sla_dict) -%}
 sla-{{ key }} = {{ value }}
-{%   endfor -%}
+{%   endfor %}
 {% endif %}
 
 [publish-connection-information]
@@ -152,7 +148,7 @@ mode = 700
 
 [resilient-request-{{namebase}}-public-key-promise]
 <= monitor-promise-base
-module = check_command_execute
+promise = check_command_execute
 name = resilient-request-{{namebase}}-public-key.py
 config-command = ${resilient-request-{{namebase}}-public-key-promise-bin:output}
 
@@ -174,7 +170,7 @@ mode = 700
 
 [resilient-request-{{namebase}}-pseudo-replicating-{{id}}-public-key-promise]
 <= monitor-promise-base
-module = check_command_execute
+promise = check_command_execute
 name = resilient-request-{{namebase}}-pseudo-replicating-{{id}}-public-key.py
 config-command = ${resilient-request-{{namebase}}-pseudo-replicating-{{id}}-public-key-promise-bin:output}
 
@@ -182,7 +178,7 @@ config-command = ${resilient-request-{{namebase}}-pseudo-replicating-{{id}}-publ
 
 
 
-## The PBS and their push / pull slaves
+## The PBS and their push / pull shared instances
 ## Adding a PBS provides resiliency
 ## Adding a backup server provides availability
 
@@ -200,28 +196,27 @@ software-type = pull-backup
 [request-pbs-{{namebase}}-{{id}}]
 <= request-pbs-common
 name = PBS ({{namebase}} / {{id}})
-config-ignore-known-hosts-file = ${slap-parameter:ignore-known-hosts-file}
 config-monitor-title = PBS ${slap-connection:computer-id}-{{namebase}}-{{id}}
 {% for key, value in six.iteritems(monitor_dict) -%}
 config-{{ key }} = {{ value }}
 {% endfor -%}
 return = ssh-key notification-url feeds-url  {{ monitor_return }}
-slave = false
-{% if sla_parameter_dict == {} -%}
+shared = false
+{% set sla_key_main = "-sla-%s%s-" % ("pbs", id) -%}
+{% set sla_key_secondary = "-sla-%s-" % (id) -%}
+{% set sla_key_main_length = sla_key_main | length -%}
+{% set sla_key_secondary_length = sla_key_secondary | length -%}
+{% set sla_dict = {} -%}
+{% for key in sla_parameter_dict.keys() -%}
+{%   if key.startswith(sla_key_main) -%}
+{%     do sla_dict.__setitem__(key[sla_key_main_length:], sla_parameter_dict.get(key)) -%}
+{%   elif key.startswith(sla_key_secondary) and key[sla_key_secondary_length:] not in sla_dict -%}
+{%       do sla_dict.__setitem__(key[sla_key_secondary_length:], sla_parameter_dict.get(key)) -%}
+{%   endif -%}
+{% endfor -%}
+{% if sla_dict == {} %}
 sla-mode = unique_by_network
 {% else %}
-{%   set sla_key_main = "-sla-%s%s-" % ("pbs", id) -%}
-{%   set sla_key_secondary = "-sla-%s-" % (id) -%}
-{%   set sla_key_main_length = sla_key_main | length -%}
-{%   set sla_key_secondary_length = sla_key_secondary | length -%}
-{%   set sla_dict = {} -%}
-{%   for key in sla_parameter_dict.keys() -%}
-{%     if key.startswith(sla_key_main) -%}
-{%       do sla_dict.__setitem__(key[sla_key_main_length:], sla_parameter_dict.get(key)) -%}
-{%     elif key.startswith(sla_key_secondary) and not sla_dict.has_key(key[sla_key_secondary_length:]) -%}
-{%         do sla_dict.__setitem__(key[sla_key_secondary_length:], sla_parameter_dict.get(key)) -%}
-{%     endif -%}
-{%   endfor -%}
 {%   for key, value in six.iteritems(sla_dict) -%}
 sla-{{ key }} = {{ value }}
 {%   endfor %}
@@ -242,7 +237,7 @@ mode = 700
 
 [resilient-request-pbs-{{namebase}}-{{id}}-public-key-promise]
 <= monitor-promise-base
-module = check_command_execute
+promise = check_command_execute
 name = resilient-request-pbs-{{namebase}}-{{id}}-public-key.py
 config-command = ${resilient-request-pbs-{{namebase}}-{{id}}-public-key-promise-bin:output}
 
@@ -258,7 +253,7 @@ config-notification-id = ${slap-connection:computer-id}-${slap-connection:partit
 config-name = ${slap-connection:computer-id}-${slap-connection:partition-id}-{{namebase}}-{{id}}
 config-title = Pulling from {{namebase}}
 config-remove-backup-older-than = {{ slapparameter_dict.get('remove-backup-older-than', '2W') }}
-slave = true
+shared = true
 sla-instance_guid = ${request-pbs-{{namebase}}-{{id}}:instance_guid}
 
 [publish-connection-information]
@@ -287,7 +282,7 @@ config-notify = ${request-{{namebase}}-pseudo-replicating-{{id}}:connection-noti
 config-notification-id = ${request-{{namebase}}-pseudo-replicating-{{id}}:pbs-notification-id}
 config-name = ${slap-connection:computer-id}-${slap-connection:partition-id}-{{namebase}}-{{id}}
 config-title = Pushing to {{namebase}} backup {{id}}
-slave = true
+shared = true
 sla-instance_guid = ${request-pbs-{{namebase}}-{{id}}:instance_guid}
 {% endfor %}
 
@@ -298,7 +293,5 @@ sla-instance_guid = ${request-pbs-{{namebase}}-{{id}}:instance_guid}
 {{namebase}}{{id}}-computer-guid =
 pbs-{{namebase}}{{id}}-computer-guid =
 {% endfor %}
-ignore-known-hosts-file = false
 
 {% endmacro %}
-

@@ -1,51 +1,30 @@
 {
   "$schema": "http://json-schema.org/draft-04/schema#",
-  "extends": "./schema-definitions.json#",
+  "type": "object",
   "properties": {
     "tcpv4-port": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/tcpv4port"
-        },
-        {
-          "description": "Start allocating ports at this value, going upward",
-          "default": 23000
-        }
-      ]
+      "description": "TCP port used for HTTP server",
+      "default": 8000,
+      "type": "integer"
     },
     "backend-count": {
       "description": "Number of backend cloudooo instances",
       "default": 1,
       "type": "integer"
     },
-    "ssl": {
-      "description": "Custom ssl certificate, key and optionaly client ca-cert and crl",
-      "properties": {
-        "cert": {
-          "description": "The content of the certificate file",
-          "type": "string"
-        },
-        "key": {
-          "description": "The content of the ssl key file",
-          "type": "string"
-        },
-        "ca-cert": {
-          "description": "The content of the ca-certificate file",
-          "type": "string"
-        },
-        "crl": {
-          "description": "The content of the revocation file",
-          "type": "string"
-        }
-      }
-    },
     "timeout": {
-      "description": "Configure apache with this timeout",
+      "description": "Timeout for document conversions, in seconds",
       "type": "integer"
     },
     "mimetype-entry-addition": {
       "description": "The list of entry to add to the cloudooo mimetype registry. Each entry should on one line which format is: \"<source_mimetype> <destination_mimetype> <handler>\"",
+      "textarea": true,
       "type": "string"
+    },
+    "enable-scripting": {
+      "description": "Enable the execution of scripts before saving a converted document. WARNING: Setting this parameter to true is unsafe, unless the CloudOoo server is private and not exposed to potential attackers",
+      "default": false,
+      "type": "boolean"
     }
   }
 }

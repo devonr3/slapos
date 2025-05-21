@@ -1,14 +1,8 @@
 [slap-configuration]
-recipe = slapos.cookbook:slapconfiguration.serialised
-computer = ${slap-connection:computer-id}
-partition = ${slap-connection:partition-id}
-url = ${slap-connection:server-url}
-key = ${slap-connection:key-file}
-cert = ${slap-connection:cert-file}
-
 # XXX Default values if doesn't exists
 root-instance-title = UNKNOWN H-S
 instance-title = UNKNOWN Instance
+configuration.monitor-interface-url = https://monitor.app.officejs.com/#page=ojsm_landing
 
 [directory]
 recipe = slapos.cookbook:mkdirectory
@@ -67,8 +61,21 @@ hash-existing-files = ${buildout:directory}/software_release/buildout.cfg
 recipe = slapos.cookbook:certificate_authority.request
 key-file = ${monitor-httpd-conf-parameter:key-file}
 cert-file = ${monitor-httpd-conf-parameter:cert-file}
-executable = ${monitor-httpd-wrapper:wrapper-path}
+executable = ${monitor-httpd-service-wrapper:output}
 wrapper = ${directory:bin}/ca-monitor-httpd
+
+[monitor-httpd-service-wrapper]
+recipe = slapos.recipe.template:jinja2
+url = {{ template_monitor_httpd_wrapper }}
+output = ${directory:bin}/monitor-httpd-service-wrapper
+pid-file = ${monitor-httpd-conf-parameter:pid-file}
+monitor-httpd-wrapper-path = ${monitor-httpd-wrapper:wrapper-path}
+monitor-httpd-conf = ${monitor-httpd-conf:output}
+context =
+    key pid_file :pid-file
+    key monitor_httpd_wrapper_path :monitor-httpd-wrapper-path
+    key monitor_httpd_conf :monitor-httpd-conf
+    raw dash_binary {{ dash_executable_location }}
 
 [ca-monitor-httpd-service]
 recipe = slapos.cookbook:wrapper
@@ -99,7 +106,6 @@ parameter-list =
   htpasswd monitor-password ${httpd-monitor-htpasswd:password-file} ${monitor-instance-parameter:username} ${httpd-monitor-htpasswd:htpasswd-path}
   file min-free-disk-MB ${promise-check-free-disk-space:config-threshold-file}
   ${monitor-instance-parameter:instance-configuration}
-# htpasswd entry:  htpasswd key password-file username htpasswd-file
 
 promise-output-file = ${directory:monitor}/monitor-bootstrap-status
 
@@ -124,16 +130,16 @@ software-type = ${slap-configuration:slap-software-type}
 
 [monitor-conf]
 recipe = slapos.recipe.template:jinja2
-template = {{ monitor_conf_template }}
-rendered = ${directory:etc}/${:filename}
+url = {{ monitor_conf_template }}
+output = ${directory:etc}/${:filename}
 filename = monitor.conf
-context = section parameter_dict           monitor-conf-parameters
+context = section parameter_dict          monitor-conf-parameters
           section promise_parameter_dict  monitor-promise-conf
-          section monitor_base_urls        monitor-base-url-dict
+          section monitor_base_urls       monitor-base-url-dict
 
 [start-monitor]
 recipe = slapos.cookbook:wrapper
-command-line = {{ monitor_bin }} -c ${monitor-conf:rendered}
+command-line = {{ monitor_bin }} -c ${monitor-conf:output}
 name = bootstrap-monitor
 wrapper-path = ${directory:scripts}/${:name}
 
@@ -144,14 +150,14 @@ storage-path = ${directory:etc}/.monitor_pwd
 [httpd-monitor-htpasswd]
 recipe = plone.recipe.command
 stop-on-error = true
-password-file = ${directory:etc}/.monitor_pwd
+password-file = ${monitor-directory:etc}/.monitor-password
 htpasswd-path = ${monitor-directory:etc}/monitor-htpasswd
+location =
+  ${:password-file}
+  ${:htpasswd-path}
 command =
   echo "${monitor-instance-parameter:password}" >${:password-file}
-  [ -s "${:htpasswd-path}" ] ||
-    {{ apache_location }}/bin/htpasswd -ci ${:htpasswd-path} "${monitor-instance-parameter:username}" <${:password-file}
-update-command =
-  [ -s "${:password-file}" ] || ${:command}
+  {{ apache_location }}/bin/htpasswd -cib ${:htpasswd-path} "${monitor-instance-parameter:username}" "${monitor-instance-parameter:password}"
 
 [monitor-symlink]
 recipe = cns.recipe.symlink
@@ -169,40 +175,37 @@ cert-file = ${ca-directory:certs}/monitor-httpd.crt
 key-file = ${ca-directory:certs}/monitor-httpd.key
 htpasswd-file = ${httpd-monitor-htpasswd:htpasswd-path}
 url = https://[${monitor-instance-parameter:monitor-httpd-ipv6}]:${:port}
-httpd-cors-config-file = ${monitor-httpd-cors:rendered}
+httpd-cors-config-file = ${monitor-httpd-cors:output}
 httpd-include-file =
 
 [monitor-httpd-conf]
 recipe = slapos.recipe.template:jinja2
-template = {{ monitor_httpd_template }}
-rendered = ${monitor-directory:etc}/monitor-httpd.conf
-mode = 0744
+url = {{ monitor_httpd_template }}
+output = ${monitor-directory:etc}/monitor-httpd.conf
 context =
   section directory monitor-directory
   section parameter_dict monitor-httpd-conf-parameter
 
 [monitor-httpd-cors]
 recipe = slapos.recipe.template:jinja2
-template = {{ monitor_https_cors }}
-rendered = ${directory:etc}/httpd-cors.cfg
-mode = 0600
+url = {{ monitor_https_cors }}
+output = ${directory:etc}/httpd-cors.cfg
 context =
   key domain monitor-instance-parameter:cors-domains
 
 [monitor-httpd-wrapper]
 recipe = slapos.cookbook:wrapper
-command-line = {{ apache_location }}/bin/httpd -f ${monitor-httpd-conf:rendered} -DFOREGROUND
+command-line = {{ apache_location }}/bin/httpd -f ${monitor-httpd-conf:output} -DFOREGROUND
 wrapper-path = ${directory:bin}/monitor-httpd
 wait-for-files =
   ${monitor-httpd-conf-parameter:key-file}
   ${monitor-httpd-conf-parameter:cert-file}
-  ${monitor-httpd-graceful-wrapper:rendered}
+  ${monitor-httpd-graceful-wrapper:output}
 
 [monitor-httpd-graceful-wrapper]
 recipe = slapos.recipe.template:jinja2
-template = {{ template_wrapper }}
-rendered = ${directory:scripts}/monitor-httpd-graceful
-mode = 0700
+url = {{ template_wrapper }}
+output = ${directory:scripts}/monitor-httpd-graceful
 context =
     key content :command
     raw dash_binary {{ dash_executable_location }}
@@ -224,7 +227,7 @@ mode = 700
 
 [monitor-globalstate-wrapper]
 recipe = slapos.cookbook:wrapper
-command-line = ${xnice-bin:output} {{ monitor_genstatus }} '${monitor-conf:rendered}'
+command-line = ${xnice-bin:output} {{ monitor_genstatus }} '${monitor-conf:output}'
 wrapper-path = ${directory:bin}/monitor-globalstate
 
 [monitor-configurator-wrapper]
@@ -250,21 +253,26 @@ recipe = slapos.cookbook:cron.d
 cron-entries = ${cron:cron-entries}
 name = monitor-globalstate
 frequency = */2 * * * *
-command = {{ bin_directory }}/randomsleep 20 && ${monitor-globalstate-wrapper:wrapper-path}
+command = {{ randomsleep }} 20 && ${monitor-globalstate-wrapper:wrapper-path}
+
+[monitor-globalstate-first-run]
+recipe = plone.recipe.command
+command = ${monitor-globalstate-wrapper:wrapper-path}
+stop-on-error = true
 
 [monitor-configurator-cron-entry]
 recipe = slapos.cookbook:cron.d
 cron-entries = ${cron:cron-entries}
 name = monitor-configurator
 frequency = * * * * *
-command = {{ bin_directory }}/randomsleep 10 && ${monitor-configurator-wrapper:wrapper-path}
+command = {{ randomsleep }} 10 && ${monitor-configurator-wrapper:wrapper-path}
 
 [monitor-collect-cron-entry]
 recipe = slapos.cookbook:cron.d
 cron-entries = ${cron:cron-entries}
 name = monitor_collect
 frequency = * * * * *
-command = {{ bin_directory }}/randomsleep 40 && ${monitor-collect-wrapper:wrapper-path}
+command = {{ randomsleep }} 40 && ${monitor-collect-wrapper:wrapper-path}
 
 [logrotate-entry-monitor-data]
 recipe = collective.recipe.template
@@ -283,7 +291,6 @@ input = inline:${:log} {
     notifempty
   }
 output = ${logrotate-directory:logrotate-entries}/${:name}
-mode = 600
 
 [logrotate-entry-monitor-promise-history]
 <= logrotate-entry-base
@@ -297,17 +304,15 @@ pre = {{ monitor_statistic }} --history_folder ${monitor-directory:public}
 recipe = slapos.cookbook:promise.plugin
 eggs =
   slapos.toolbox
-content =
-  from slapos.promise.plugin.${:module} import RunPromise
-mode = 600
+module = slapos.promise.plugin.${:promise}
 output = ${directory:plugins}/${:name}
 
 [monitor-httpd-promise]
 <= monitor-promise-base
-module = check_url_available
+promise = check_url_available
 name = monitor-httpd-listening-on-tcp.py
 config-url = ${monitor-httpd-conf-parameter:url}
-config-check-secure = 1
+config-http-code = 401
 
 [monitor-publish-parameters]
 # XXX depends on monitor-base section
@@ -316,28 +321,34 @@ monitor-url = ${:monitor-base-url}/public/feeds
 monitor-user = ${monitor-instance-parameter:username}
 monitor-password = ${monitor-instance-parameter:password}
 
+[monitor-parameters-propagation]
+config-monitor-interface-url = ${slap-configuration:configuration.monitor-interface-url}
+
+[monitor-interface-configuration]
+recipe = slapos.recipe.build
+url = ${monitor-parameters-propagation:config-monitor-interface-url}
+init =
+  from six.moves.urllib.parse import urlparse
+  options['cors-domain'] = urlparse(options['url']).hostname
+
 [monitor-instance-parameter]
 monitor-title = ${slap-configuration:instance-title}
 monitor-httpd-ipv6 = ${slap-configuration:ipv6-random}
 monitor-httpd-port = 8196
 # XXX - Set monitor-base-url = ${monitor-httpd-conf-parameter:url} => https://[ipv6]:port
-monitor-base-url = ${monitor-frontend-promise:url}
+monitor-base-url = ${monitor-frontend:connection-secure_access}
 #monitor-base-url = ${monitor-httpd-conf-parameter:url}
 root-instance-title = ${slap-configuration:root-instance-title}
 monitor-url-list =
-cors-domains = monitor.app.officejs.com
+cors-domains = ${monitor-interface-configuration:cors-domain}
 # XXX Hard coded parameter
 collector-db = /srv/slapgrid/var/data-log/collector.db
 # Credentials
 password = ${monitor-htpasswd:passwd}
 username = admin
-# XXX: type key value
-# ex raw monitor-password resqdsdsd34
 instance-configuration =
-
 configuration-file-path = ${monitor-directory:etc}/monitor_knowledge0.cfg
-
-interface-url = https://monitor.app.officejs.com
+interface-url = ${monitor-interface-configuration:url}
 
 [monitor-frontend]
 <= slap-connection
@@ -345,23 +356,36 @@ recipe = slapos.cookbook:requestoptional
 name = Monitor Frontend ${monitor-instance-parameter:monitor-title}
 # XXX We have hardcoded SR URL here.
 software-url = http://git.erp5.org/gitweb/slapos.git/blob_plain/HEAD:/software/apache-frontend/software.cfg
-slave = true
+shared = true
 config-url = ${monitor-httpd-conf-parameter:url}
 config-https-only = true
 #software-type = custom-personal
 return = domain secure_access
 
+# Requests to the frontend URL should succeed with the correct
+# credentials.
+[check-monitor-password-promise]
+<= monitor-promise-base
+promise = check_url_available
+name = check-monitor-frontend-password.py
+url = ${monitor-frontend:connection-secure_access}
+config-url = ${:url}
+config-username = ${monitor-instance-parameter:username}
+config-password = ${monitor-instance-parameter:password}
+
+# Requests to the frontend URL should fail when no credentials are
+# supplied.
 [monitor-frontend-promise]
 <= monitor-promise-base
-module = check_url_available
+promise = check_url_available
 name = monitor-http-frontend.py
 url = ${monitor-frontend:connection-secure_access}
 config-url = ${:url}
-config-check-secure = 1
+config-http-code = 401
 
 [monitor-bootstrap-promise]
 <= monitor-promise-base
-module = monitor_bootstrap_status
+promise = monitor_bootstrap_status
 name = monitor-bootstrap-status.py
 config-process-pid-file = ${monitor-conf-parameters:pid-file}
 config-process-name = ${start-monitor:name}
@@ -369,13 +393,13 @@ config-status-file = ${monitor-conf-parameters:promise-output-file}
 
 [promise-check-slapgrid]
 <= monitor-promise-base
-module = check_partition_deployment_state
+promise = check_partition_deployment_state
 name = buildout-${slap-connection:partition-id}-status.py
 config-monitor-url = ${monitor-instance-parameter:monitor-base-url}
 
 [promise-check-free-disk-space]
 <= monitor-promise-base
-module = check_free_disk_space
+promise = check_free_disk_space
 name = check-free-disk-space.py
 config-collectordb = ${monitor-instance-parameter:collector-db}
 config-threshold-file = ${directory:etc}/min-free-disk-size
@@ -388,6 +412,7 @@ update-command =
 base-url = ${monitor-conf-parameters:base-url}
 depends =
   ${monitor-globalstate-cron-entry:name}
+  ${monitor-globalstate-first-run:recipe}
   ${monitor-configurator-cron-entry:name}
   ${monitor-collect-cron-entry:name}
   ${cron-entry-logrotate:name}
@@ -396,6 +421,8 @@ depends =
   ${start-monitor:wrapper-path}
   ${ca-monitor-httpd-service:wrapper-path}
   ${monitor-httpd-promise:name}
+  ${monitor-frontend-promise:name}
+  ${check-monitor-password-promise:name}
   ${monitor-bootstrap-promise:name}
   ${monitor-symlink:recipe}
   ${promise-check-slapgrid:recipe}
@@ -403,10 +430,32 @@ depends =
   ${logrotate-entry-monitor-data:name}
   ${logrotate-entry-monitor-promise-history:name}
 
+[expand-monitor-uri-template]
+recipe = slapos.recipe.build
+template = ${monitor-instance-parameter:interface-url}{&url,username,password}
+url = ${monitor-publish-parameters:monitor-url}
+username = ${monitor-publish-parameters:monitor-user}
+password = ${monitor-publish-parameters:monitor-password}
+init =
+  import zc.buildout
+  import pkg_resources
+  from six.moves.urllib.parse import unquote
+
+  buildout_options = self.buildout["buildout"]
+  zc.buildout.easy_install.install(
+    ["uritemplate"],
+    dest=None,
+    working_set=pkg_resources.working_set,
+    path=[
+      buildout_options["develop-eggs-directory"],
+      buildout_options["eggs-directory"]])
+
+  import uritemplate
+  options['uri'] = unquote(uritemplate.URITemplate(options['template']).expand(options))
+
 [monitor-publish]
 monitor-base-url = ${monitor-publish-parameters:monitor-base-url}
-monitor-setup-url = ${monitor-instance-parameter:interface-url}/#page=settings_configurator&url=${monitor-publish-parameters:monitor-url}&username=${monitor-publish-parameters:monitor-user}&password=${monitor-publish-parameters:monitor-password}
-
+monitor-setup-url = ${expand-monitor-uri-template:uri}
 
 [buildout]
 
